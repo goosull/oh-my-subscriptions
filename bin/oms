@@ -75,21 +75,34 @@ def claude_usage(acct):
 
 # Bump whenever the shape of a usage dict changes, so a cache written by an older
 # build is discarded instead of quietly serving a record with fields missing.
-CACHE_V = 4
+CACHE_V = 5
+CACHE_TTL = 60
+
+
+def cached(acct, read):
+    """Memoise a reading briefly. Every provider needs this: codex spawns a subprocess,
+    kiro walks a session history that only grows, and the status line re-renders often."""
+    c = USAGE / f"{acct['name']}.cache.json"
+    try:
+        if time.time() - c.stat().st_mtime < CACHE_TTL:
+            d = json.loads(c.read_text())
+            if d.pop("v", 0) == CACHE_V:
+                d["age"] = time.time() - d.pop("at", time.time())
+                return d
+    except (OSError, ValueError):
+        pass
+    u = read(acct)
+    if not u.get("err"):
+        USAGE.mkdir(parents=True, exist_ok=True)
+        try:
+            c.write_text(json.dumps({**u, "at": time.time() - u.get("age", 0), "v": CACHE_V}))
+        except OSError:
+            pass
+    return u
 
 
 def codex_usage(acct):
-    c = USAGE / f"{acct['name']}.codex-cache.json"
-    if c.exists() and time.time() - c.stat().st_mtime < 60:
-        d = json.loads(c.read_text())
-        if d.pop("v", 0) == CACHE_V:
-            d["age"] = time.time() - d.pop("at", time.time())
-            return d
-    u = _from_rpc(acct, _codex_rpc(acct)) or _codex_scan(acct)
-    if not u.get("err"):
-        USAGE.mkdir(parents=True, exist_ok=True)
-        c.write_text(json.dumps({**u, "at": time.time() - u["age"], "v": CACHE_V}))
-    return u
+    return cached(acct, lambda a: _from_rpc(a, _codex_rpc(a)) or _codex_scan(a))
 
 
 def _codex_rpc(acct, timeout=12):
@@ -212,6 +225,10 @@ def _win(mins):
 # It is reported with a leading ">=" so it is never mistaken for the real figure.
 
 def kiro_usage(acct):
+    return cached(acct, _kiro_scan)
+
+
+def _kiro_scan(acct):
     size = acct.get("size")
     if not size:
         return {"err": "set size=<plan credits> to track"}
@@ -364,6 +381,16 @@ def ensure_installed(vendor, allow_install=True):
     return True
 
 
+def usage_all(accounts):
+    """Read every account at once. Each read waits on its own subprocess or disk walk,
+    so doing them in sequence made status cost the sum rather than the slowest."""
+    if len(accounts) < 2:
+        return [usage(a) for a in accounts]
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=min(8, len(accounts))) as pool:
+        return list(pool.map(usage, accounts))
+
+
 def usage(acct):
     p = provider(acct)
     if not p["usage"]:
@@ -409,8 +436,7 @@ def cmd_status(cfg, args):
     if not cfg["accounts"]:
         die(f"no accounts yet. try:  oms login <{'|'.join(PROVIDERS)}>")
     rows, blocked_any = [], False
-    for a in cfg["accounts"]:
-        u = usage(a)
+    for a, u in zip(cfg["accounts"], usage_all(cfg["accounts"])):
         if u.get("err"):
             rows.append([a["name"], a["vendor"], "-", "! " + u["err"], "-", "-", "-"])
             continue
@@ -440,8 +466,7 @@ def _status_json(cfg):
     ordering and the `blocked` reason are the policy; everything else is the reading.
     """
     rows = []
-    for a in cfg["accounts"]:
-        u = usage(a)
+    for a, u in zip(cfg["accounts"], usage_all(cfg["accounts"])):
         row = {"name": a["name"], "vendor": a["vendor"], "dir": a["dir"],
                "bin": provider(a)["bin"], "installed": installed(a["vendor"]),
                "flags": launch_flags(a)}
@@ -573,14 +598,9 @@ def cmd_check(cfg, args):
 
 
 def _best_alt(cfg, acct):
-    cands = []
-    for b in cfg["accounts"]:
-        if b["name"] == acct["name"]:
-            continue
-        v = usage(b)
-        if v.get("err") or blocked(b, v, cfg["block_at"]):
-            continue
-        cands.append((sel_key(cfg, b, v), b, v))
+    others = [b for b in cfg["accounts"] if b["name"] != acct["name"]]
+    cands = [(sel_key(cfg, b, v), b, v) for b, v in zip(others, usage_all(others))
+             if not v.get("err") and not blocked(b, v, cfg["block_at"])]
     if not cands:
         return "No other account has known headroom."
     _, b, v = min(cands, key=lambda t: t[0])
@@ -818,14 +838,9 @@ def cmd_auto(cfg, args):
             die(f"which provider? you have: {', '.join(have) or 'none'}\n"
                 f"  oms auto <{'|'.join(have) or '|'.join(PROVIDERS)}> [args...]")
         vendor, rest = have[0], args
-    cands = []
-    for a in cfg["accounts"]:
-        if a["vendor"] != vendor:
-            continue
-        u = usage(a)
-        if u.get("err") or blocked(a, u, cfg["block_at"]):
-            continue
-        cands.append((sel_key(cfg, a, u), a, u))
+    mine = [a for a in cfg["accounts"] if a["vendor"] == vendor]
+    cands = [(sel_key(cfg, a, u), a, u) for a, u in zip(mine, usage_all(mine))
+             if not u.get("err") and not blocked(a, u, cfg["block_at"])]
     if not cands:
         die(f"no {vendor} account is both known-good and unblocked. run 'oms status'")
     _, best, bu = min(cands, key=lambda t: t[0])
@@ -991,14 +1006,10 @@ def cmd_statusline(cfg, args):
         bad = paid and max(live.values()) >= limit
         rows.append((f"{RED}!{RESET}" if bad else "",
                      f"{BOLD}{GREEN}{name or 'claude'}{RESET}", live, bad))
-    rest = []
-    for a in cfg["accounts"]:
-        if a["name"] == name:
-            continue
-        u = usage(a)
-        rest.append((a["vendor"] != (here or {}).get("vendor"), a["vendor"],
-                     sel_key(cfg, a, u) if not u.get("err") else (9,),
-                     a, u))
+    others = [a for a in cfg["accounts"] if a["name"] != name]
+    rest = [(a["vendor"] != (here or {}).get("vendor"), a["vendor"],
+             sel_key(cfg, a, u) if not u.get("err") else (9,), a, u)
+            for a, u in zip(others, usage_all(others))]
     for *_, a, u in sorted(rest, key=lambda t: t[:3]):
         nm = f"{DIM}{a['name']}{RESET}"
         if u.get("err") or not u.get("windows"):
@@ -1114,7 +1125,7 @@ def cmd_rename(cfg, args):
     a = find(cfg, old)
     if any(x["name"] == new for x in cfg["accounts"]):
         die(f"'{new}' is already registered")
-    for suffix in (".json", ".codex-cache.json"):
+    for suffix in (".json", ".cache.json", ".codex-cache.json"):
         src = USAGE / f"{old}{suffix}"
         if src.exists():
             src.rename(USAGE / f"{new}{suffix}")
@@ -1157,7 +1168,7 @@ def cmd_remove(cfg, args):
         die("usage: oms remove <name> [--purge]   (--purge also deletes the profile)")
     a = find(cfg, args[0])
     cfg["accounts"] = [x for x in cfg["accounts"] if x["name"] != a["name"]]
-    for suffix in (".json", ".codex-cache.json"):
+    for suffix in (".json", ".cache.json", ".codex-cache.json"):
         (USAGE / f"{a['name']}{suffix}").unlink(missing_ok=True)
     if cfg.get("priority"):
         cfg["priority"] = [n for n in cfg["priority"] if n != a["name"]] or None
@@ -1216,6 +1227,14 @@ def selftest():
     assert "Opus" in _session_line({"model": {"display_name": "Opus"}}, 60)
     assert _session_line({}, 60) is None
     assert _mins("5h") < _mins("7d") < _mins("zz"), "columns run shortest window first"
+    # monthly periods must roll over the end of a month, and of a year
+    import datetime as _dt
+    for _day in (1, 15, 28):
+        _s = _dt.datetime.fromisoformat(_period_start(_day).replace("Z", "+00:00"))
+        _e = _dt.datetime.fromtimestamp(_period_end(_day), _dt.timezone.utc)
+        assert _s.day == _day and _e.day == _day, "a period must start and end on its day"
+        assert _s <= _dt.datetime.now(_dt.timezone.utc) < _e, "today must fall inside it"
+        assert 27 <= (_e - _s).days <= 32, f"a month, not {(_e - _s).days} days"
     assert _coerce("block_at", "90") == 90 and _coerce("paid_overflow", "no") is False
     assert _coerce("args", "--model opus") == ["--model", "opus"]
     assert _coerce("args", "") is None and _coerce("priority", "auto") is None
