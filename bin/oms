@@ -211,6 +211,44 @@ def env_for(acct):
     return e
 
 
+HANDOFF = OMS / "handoff.md"
+HANDOFF_MAX = 60_000  # keep the brief well clear of the OS argument limit
+
+
+def cmd_handoff(cfg, args):
+    """The note carried into the next session when you switch accounts.
+
+    A session cannot actually move between accounts - its transcript is written with
+    the account that owns it - so this carries a brief instead of a conversation. It is
+    just text, which is why it also works claude -> codex.
+    """
+    if args and args[0] == "--clear":
+        HANDOFF.unlink(missing_ok=True)
+        print("handoff cleared")
+        return
+    if args:  # `oms handoff -` reads from stdin
+        text = sys.stdin.read() if args[0] == "-" else " ".join(args)
+        OMS.mkdir(parents=True, exist_ok=True)
+        HANDOFF.write_text(text[:HANDOFF_MAX])
+        print(f"handoff saved ({len(text)} chars) -> launch with: oms run <account> --handoff")
+        return
+    if not HANDOFF.exists():
+        print("no handoff set.\n  oms handoff -        read a brief from stdin"
+              "\n  /oms:handoff         have Claude write one from this session")
+        return
+    print(HANDOFF.read_text())
+
+
+def _handoff_prompt():
+    if not HANDOFF.exists():
+        die("no handoff set. write one with '/oms:handoff' or 'oms handoff -'")
+    t = HANDOFF.read_text().strip()
+    if not t:
+        die("the handoff note is empty")
+    return ("Continuing work from another account's session. This is the handoff brief;"
+            " pick up from it.\n\n" + t[:HANDOFF_MAX])
+
+
 def cmd_config(cfg, args):
     """Per-account flags, handed to the vendor CLI on every launch.
 
@@ -246,7 +284,10 @@ def cmd_run(cfg, args, check=True):
         elif (b := blocked(a, u, cfg["block_at"])):
             die(f"{a['name']} blocked: {b}\n     'oms run --force {a['name']}' to override, "
                 f"or 'oms auto {a['vendor']}' to pick another")
-    os.execvpe(a["vendor"], [a["vendor"], *a.get("args", []), *args[1:]], env_for(a))
+    extra = args[1:]
+    if "--handoff" in extra:
+        extra = [x for x in extra if x != "--handoff"] + [_handoff_prompt()]
+    os.execvpe(a["vendor"], [a["vendor"], *a.get("args", []), *extra], env_for(a))
 
 
 def rank(u):
@@ -320,6 +361,8 @@ def cmd_auto(cfg, args):
     why = (f"5h {bu['short_pct']:.0f}%" if bu.get("short_pct") is not None
            else f"weekly {bu['pct']:.0f}%")
     print(f"oms: {best['name']} ({why})", file=sys.stderr)
+    if "--handoff" in rest:
+        rest = [x for x in rest if x != "--handoff"] + [_handoff_prompt()]
     os.execvpe(vendor, [vendor, *best.get("args", []), *rest], env_for(best))
 
 
@@ -385,6 +428,9 @@ def cmd_statusline(cfg, args):
             for k, l in (("five_hour", "5h"), ("seven_day", "7d")) if rl.get(k)]
 
     chips = []
+    sess = _session_chip(d)
+    if sess:
+        chips.append(sess)
     if live:  # the running session is authoritative for its own account
         limit = (here or {}).get("block_at", cfg["block_at"])
         paid = (here or {}).get("paid_overflow", True)
@@ -412,6 +458,31 @@ def _group(label, windows, is_blocked, active, width):
     warn = f"{RED}!{RESET}" if any(is_blocked(p) for _, p in windows) else ""
     name = f"{BOLD}{label}{RESET}" if active else f"{DIM}{label}{RESET}"
     return f"{warn}{name} {meters}"
+
+
+def _tokens(n):
+    if not n:
+        return "?"
+    return f"{n // 1000000}M" if n >= 1000000 else f"{n // 1000}K"
+
+
+def _session_chip(d):
+    """What this session is actually running: model, effort, and context headroom."""
+    mdl = (d.get("model") or {}).get("display_name") or (d.get("model") or {}).get("id")
+    if not mdl:
+        return None
+    eff = (d.get("effort") or {}).get("level")
+    cw = d.get("context_window") or {}
+    left = cw.get("remaining_percentage")
+    if left is None and cw.get("used_percentage") is not None:
+        left = 100 - cw["used_percentage"]
+    bits = [f"{BOLD}{mdl}{RESET}" + (f" {DIM}{eff}{RESET}" if eff else "")]
+    if cw.get("context_window_size"):
+        bits.append(f"{DIM}{_tokens(cw['context_window_size'])} window{RESET}")
+    if left is not None:
+        c = RED if left < 15 else (YELLOW if left < 35 else GREEN)
+        bits.append(f"{DIM}ctx{RESET} {c}{left:.0f}% left{RESET}")
+    return f"  {DIM}·{RESET}  ".join(bits)
 
 
 def _wide(t):
@@ -564,6 +635,13 @@ def selftest():
         "a one-digit and a two-digit reading must occupy the same width, or columns jitter"
     assert "7d" in _meter(8, False, 6, "7d") and "5h" in _meter(8, False, 6, "5h")
     assert _wide(f"{RED}abc{RESET}") == 3, "width must ignore colour escapes"
+    assert _tokens(1000000) == "1M" and _tokens(200000) == "200K" and _tokens(None) == "?"
+    c = _session_chip({"model": {"display_name": "Opus"}, "effort": {"level": "high"},
+                       "context_window": {"context_window_size": 1000000, "used_percentage": 34}})
+    assert "Opus" in c and "high" in c and "1M" in c and "66% left" in c
+    # a model that takes no effort, and a session before its first API call
+    assert "Opus" in _session_chip({"model": {"display_name": "Opus"}})
+    assert _session_chip({}) is None
     wide = ["x" * 30] * 4
     assert len(_pack(wide, 80)) == 2 and len(_pack(wide, 200)) == 1
     assert "+6 more" in _pack(["y" * 30] * 12, 80, max_rows=3)[-1]
@@ -572,8 +650,8 @@ def selftest():
 
 CMDS = {"status": cmd_status, "add": cmd_add, "run": cmd_run, "auto": cmd_auto,
         "login": cmd_login, "rename": cmd_rename, "priority": cmd_priority,
-        "config": cmd_config, "statusline": cmd_statusline, "install": cmd_install,
-        "env": cmd_env}
+        "config": cmd_config, "handoff": cmd_handoff, "statusline": cmd_statusline,
+        "install": cmd_install, "env": cmd_env}
 USAGE_TEXT = __doc__ + """
   oms login <claude|codex>             log in to a new account, then name it
   oms add <name> <claude|codex> [--dir PATH] [--paid-overflow yes|no]
@@ -584,6 +662,8 @@ USAGE_TEXT = __doc__ + """
   oms rename <old> <new>               rename an account, keeping its usage history
   oms priority [<name>... | --auto]    show or set the order `oms auto` picks in
   oms config [<name> <flags...>]       vendor flags to launch an account with
+  oms handoff [- | --clear]            the brief carried into the next session
+  oms run <name> --handoff             launch carrying that brief as the first prompt
   oms env <name>                       print the export line for a shell
 """
 

@@ -24,9 +24,12 @@ With the status line installed, every account stays visible while you work — t
 you're in with both its windows, the rest with their hottest one:
 
 ```
-claude-main 5h ━━━───── 34%  7d ━━━━━━─ 88%  │  claude-alt 5h ━──── 12%  7d ━━─── 31%
-codex-main 5h ━━━━━ 97%  7d ━━─── 40%
+Opus high  ·  1M window  ·  ctx 66% left  │  claude-main 5h ━━━───── 34%  7d ━━━━━━─ 88%
+claude-alt 5h ━──── 12%  7d ━━─── 31%  │  codex-main 5h ━━━━━ 97%  7d ━━─── 40%
 ```
+
+The left segment is the running session itself — its model, reasoning effort, context
+window and how much of it is left — so a model or `/effort` change shows up immediately.
 
 Accounts appear in the order `oms auto` would pick them — the one you're in first, then
 its own vendor's alternatives, so the next account to switch to is always the next chip.
@@ -43,7 +46,8 @@ reads on a terminal with no colour.
 
 Installed as a Claude Code plugin, two skills keep it out of the terminal:
 `/oms:status` answers "which account should I use?" mid-session, `/oms:priority` shows
-or changes the pick order, and `/oms:config` sets an account's model, effort, or name.
+or changes the pick order, `/oms:config` sets an account's model, effort, or name, and
+`/oms:handoff` writes the brief that carries your work to another account.
 
 ## Install
 
@@ -127,6 +131,20 @@ oms config claude-alt --clear
 There is no translation layer — these are the vendor's own flags, so anything `claude`
 or `codex` accepts works, including `-c <key>=<value>` for any codex config key. Stored
 flags go in front of anything you type at the call site, so an explicit flag still wins.
+
+## Switching without losing the thread
+
+A session cannot move between accounts: its transcript is written with the account that
+owns it, and codex and claude share no transcript format. So `oms` carries a brief
+rather than pretending to resume a conversation.
+
+```bash
+/oms:handoff                      # Claude writes a brief from the current session
+oms run claude-alt --handoff      # it becomes the first prompt over there
+oms auto codex --handoff          # works across vendors too, it is only text
+```
+
+`oms handoff -` takes a brief on stdin if you would rather write it yourself.
 
 ## The paid-credit guard
 
