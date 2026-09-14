@@ -100,14 +100,21 @@ wrong anyway? `oms rename <old> <new>` moves its recorded usage along with it.
 `oms install` sets `statusLine` in `~/.claude/settings.json`, chaining whatever status
 line you already had. Restart Claude Code and the numbers start filling in.
 
-## How it works
+## Providers
 
 | | isolation | where the numbers come from |
 |---|---|---|
 | claude | `CLAUDE_CONFIG_DIR=<dir>` | `rate_limits` in the [statusLine stdin JSON](https://code.claude.com/docs/en/statusline) |
 | codex | `CODEX_HOME=<dir>` | `rate_limits` in the session rollout files codex writes under that dir |
+| kiro | `KIRO_HOME=<dir>` | — Kiro exposes no usage command and writes no local quota record |
 
-Both env vars are documented, supported configuration. **`oms` never calls a vendor
+A provider you have not installed is still a provider: `oms add` registers the account
+and tells you how to install the CLI, and it starts working once that CLI is there.
+Where a provider reports no usage, `oms status` says so rather than showing it as an
+empty account, and `oms auto` leaves it out of automatic selection because there is
+nothing to choose on.
+
+All three environment variables are documented, supported configuration. **`oms` never calls a vendor
 API, never reads or writes a credential, and never handles a token.** It reads a
 documented extension point and files the vendors' own CLIs wrote on your disk, and
 it launches the vendors' own CLIs to do the work.

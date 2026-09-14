@@ -129,8 +129,66 @@ def _win(mins):
     return f"{h}h" if h < 48 else f"{h // 24}d"
 
 
+# --- providers ----------------------------------------------------------------
+# Everything provider-specific lives here, so adding one is a table entry rather than
+# a hunt through the file. A provider that is not installed is still a provider: oms
+# registers the account and tells you how to install it.
+
+PROVIDERS = {
+    "claude": {
+        "bin": "claude",
+        "home": "CLAUDE_CONFIG_DIR",
+        "install": "npm install -g @anthropic-ai/claude-code",
+        "login": None,  # there is no login subcommand; you run /login inside a session
+        "launch": [],
+        "usage": lambda a: claude_usage(a),
+        "flags": {"model": lambda v: ["--model", v],
+                  "effort": lambda v: ["--effort", v]},
+        "efforts": ["low", "medium", "high", "xhigh", "max"],
+    },
+    "codex": {
+        "bin": "codex",
+        "home": "CODEX_HOME",
+        "install": "npm install -g @openai/codex",
+        "login": ["login"],
+        "launch": [],
+        "usage": lambda a: codex_usage(a),
+        "flags": {"model": lambda v: ["-m", v],
+                  "effort": lambda v: ["-c", f'model_reasoning_effort="{v}"'],
+                  "context": lambda v: ["-c", f"model_context_window={v}"]},
+        "efforts": ["minimal", "low", "medium", "high", "xhigh", "max"],
+    },
+    "kiro": {
+        "bin": "kiro-cli",
+        "home": "KIRO_HOME",
+        "install": "see https://kiro.dev/docs/getting-started/installation/",
+        "login": ["login"],
+        "launch": ["chat"],
+        # Kiro exposes no usage command and writes no local quota record, so oms can
+        # isolate and launch an account but cannot report what it has left.
+        "usage": None,
+        "flags": {},
+        "efforts": [],
+    },
+}
+
+
+def provider(acct):
+    return PROVIDERS[acct["vendor"]]
+
+
+def installed(vendor):
+    from shutil import which
+    return which(PROVIDERS[vendor]["bin"]) is not None
+
+
 def usage(acct):
-    return (claude_usage if acct["vendor"] == "claude" else codex_usage)(acct)
+    p = provider(acct)
+    if not p["usage"]:
+        return {"err": f"{acct['vendor']} reports no usage"}
+    if not installed(acct["vendor"]):
+        return {"err": f"{p['bin']} not installed"}
+    return p["usage"](acct)
 
 
 def _until(ts):
@@ -181,8 +239,9 @@ def cmd_status(cfg, args):
 
 
 def cmd_add(cfg, args):
-    if len(args) < 2 or args[1] not in ("claude", "codex"):
-        die("usage: oms add <name> <claude|codex> [--dir PATH] [--paid-overflow yes|no]")
+    if len(args) < 2 or args[1] not in PROVIDERS:
+        die(f"usage: oms add <name> <{'|'.join(PROVIDERS)}> [--dir PATH]"
+            " [--paid-overflow yes|no]")
     name, vendor = args[0], args[1]
     d = os.path.expanduser(args[args.index("--dir") + 1]) if "--dir" in args else str(OMS / "accounts" / name)
     Path(d).mkdir(parents=True, exist_ok=True)
@@ -199,14 +258,18 @@ def cmd_add(cfg, args):
     cfg["accounts"] = [a for a in cfg["accounts"] if a["name"] != name] + [acct]
     save(cfg)
     print(f"added {name} -> {d}")
-    print(f"log in with:  oms run {name}" + ("   (then /login inside)" if vendor == "claude" else ""))
+    if not installed(vendor):
+        print(f"{PROVIDERS[vendor]['bin']} is not installed yet. to install:\n"
+              f"  {PROVIDERS[vendor]['install']}\n"
+              f"the account is registered either way; it starts working once it is there.")
+    print(f"log in with:  oms login {vendor}")
 
 
 def env_for(acct):
     e = dict(os.environ)
     for k in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"):
         e.pop(k, None)  # an API key would turn plan usage into metered usage
-    e["CLAUDE_CONFIG_DIR" if acct["vendor"] == "claude" else "CODEX_HOME"] = acct["dir"]
+    e[provider(acct)["home"]] = acct["dir"]
     e["OMS_ACCOUNT"] = acct["name"]
     return e
 
@@ -301,25 +364,17 @@ def _best_alt(cfg, acct):
 # One vocabulary, translated per vendor at launch. The point of oms is that you say
 # what you want once; remembering that codex spells effort `-c model_reasoning_effort`
 # and claude spells it `--effort` is exactly the work it should be absorbing.
-TRANSLATE = {
-    "model": {"claude": lambda v: ["--model", v],
-              "codex": lambda v: ["-m", v]},
-    "effort": {"claude": lambda v: ["--effort", v],
-               "codex": lambda v: ["-c", f'model_reasoning_effort="{v}"']},
-    # claude takes its window from the model, so there is nothing to set
-    "context": {"codex": lambda v: ["-c", f"model_context_window={v}"]},
-}
-EFFORTS = {"claude": ["low", "medium", "high", "xhigh", "max"],
-           "codex": ["minimal", "low", "medium", "high", "xhigh", "max"]}
+SETTING_KEYS = ("model", "effort", "context")
 
 
 def launch_flags(acct):
-    """Settings for this account, in its own vendor's spelling, then any raw args."""
-    out = []
-    for key, table in TRANSLATE.items():
+    """Settings for this account, in its own provider's spelling, then any raw args."""
+    flags = provider(acct)["flags"]
+    out = list(provider(acct)["launch"])
+    for key in SETTING_KEYS:
         v = acct.get(key)
-        if v is not None and acct["vendor"] in table:
-            out += table[acct["vendor"]](str(v))
+        if v is not None and key in flags:
+            out += flags[key](str(v))
     return out + list(acct.get("args") or [])
 
 
@@ -410,13 +465,14 @@ def cmd_set(cfg, args):
             cfg.pop(k, None) if val is None else cfg.update({k: val})
             continue
         for a in targets:
-            if k in TRANSLATE and a["vendor"] not in TRANSLATE[k]:
+            if k in SETTING_KEYS and k not in provider(a)["flags"]:
                 # say so rather than storing a setting that will never be applied
                 print(f"  skipped {a['name']}: {a['vendor']} has no {k} setting",
                       file=sys.stderr)
                 continue
-            if k == "effort" and val and val not in EFFORTS[a["vendor"]]:
-                die(f"{a['vendor']} takes effort {', '.join(EFFORTS[a['vendor']])}; got {val!r}")
+            if k == "effort" and val and val not in provider(a)["efforts"]:
+                die(f"{a['vendor']} takes effort "
+                    f"{', '.join(provider(a)['efforts'])}; got {val!r}")
             if k == "name":
                 cmd_rename(cfg, [a["name"], val])  # moves usage and profile with it
             elif val is None:
@@ -442,7 +498,10 @@ def cmd_run(cfg, args, check=True):
     extra = args[1:]
     if "--handoff" in extra:
         extra = [x for x in extra if x != "--handoff"] + [_handoff_prompt()]
-    os.execvpe(a["vendor"], [a["vendor"], *launch_flags(a), *extra], env_for(a))
+    b = provider(a)["bin"]
+    if not installed(a["vendor"]):
+        die(f"{b} is not installed. to install:\n  {provider(a)['install']}")
+    os.execvpe(b, [b, *launch_flags(a), *extra], env_for(a))
 
 
 def rank(u):
@@ -500,8 +559,8 @@ def cmd_priority(cfg, args):
 
 
 def cmd_auto(cfg, args):
-    vendor = args[0] if args and args[0] in ("claude", "codex") else "claude"
-    rest = args[1:] if args and args[0] in ("claude", "codex") else args
+    vendor = args[0] if args and args[0] in PROVIDERS else "claude"
+    rest = args[1:] if args and args[0] in PROVIDERS else args
     cands = []
     for a in cfg["accounts"]:
         if a["vendor"] != vendor:
@@ -518,7 +577,8 @@ def cmd_auto(cfg, args):
     print(f"oms: {best['name']} ({why})", file=sys.stderr)
     if "--handoff" in rest:
         rest = [x for x in rest if x != "--handoff"] + [_handoff_prompt()]
-    os.execvpe(vendor, [vendor, *launch_flags(best), *rest], env_for(best))
+    b = PROVIDERS[vendor]["bin"]
+    os.execvpe(b, [b, *launch_flags(best), *rest], env_for(best))
 
 
 # --- status line rendering ---------------------------------------------------
@@ -715,24 +775,26 @@ def cmd_install(cfg, args):
 
 def cmd_login(cfg, args):
     """Log in to a new account first, name it after. `oms login codex`"""
-    if not args or args[0] not in ("claude", "codex"):
-        die("usage: oms login <claude|codex>")
+    if not args or args[0] not in PROVIDERS:
+        die(f"usage: oms login <{'|'.join(PROVIDERS)}>")
     vendor = args[0]
     tmp = OMS / "pending" / f"{vendor}-{int(time.time())}"
     tmp.mkdir(parents=True, exist_ok=True)
     e = dict(os.environ)
     for k in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"):
         e.pop(k, None)
-    e["CLAUDE_CONFIG_DIR" if vendor == "claude" else "CODEX_HOME"] = str(tmp)
+    e[PROVIDERS[vendor]["home"]] = str(tmp)
+    p = PROVIDERS[vendor]
+    if not installed(vendor):
+        die(f"{p['bin']} is not installed. to install:\n  {p['install']}")
     if vendor == "claude":
         for sh in SHARED:  # so the login session looks like your normal setup
             src = DEFAULT_CLAUDE_DIR / sh
             if src.exists():
                 (tmp / sh).symlink_to(src)
-        print("launching claude - run /login inside it, then exit with Ctrl-D")
-        cmd = ["claude"]
-    else:
-        cmd = ["codex", "login"]
+    cmd = [p["bin"], *(p["login"] or p["launch"])]
+    if p["login"] is None:
+        print(f"launching {p['bin']} - run /login inside it, then exit with Ctrl-D")
     if subprocess.run(cmd, env=e).returncode != 0:
         die(f"login failed; nothing registered. profile left at {tmp}")
     taken = {a["name"] for a in cfg["accounts"]}
@@ -785,7 +847,7 @@ def cmd_rename(cfg, args):
 
 def cmd_env(cfg, args):
     a = find(cfg, args[0])
-    print(f'export {"CLAUDE_CONFIG_DIR" if a["vendor"] == "claude" else "CODEX_HOME"}="{a["dir"]}"')
+    print(f'export {provider(a)["home"]}="{a["dir"]}"')
 
 
 def selftest():
@@ -832,8 +894,13 @@ def selftest():
         ["-c", 'model_reasoning_effort="high"']
     assert launch_flags({"vendor": "codex", "model": "gpt-5.3-codex"}) == ["-m", "gpt-5.3-codex"]
     assert launch_flags({"vendor": "claude", "context": 500}) == [], \
-        "a setting the vendor has no flag for must not leak into its argv"
+        "a setting the provider has no flag for must not leak into its argv"
     assert launch_flags({"vendor": "codex", "model": "m", "args": ["--raw"]})[-1] == "--raw"
+    assert launch_flags({"vendor": "kiro"})[0] == "chat", "a provider may need a subcommand"
+    assert all({"bin", "home", "install", "launch", "usage", "flags", "efforts"} <= set(v)
+               for v in PROVIDERS.values()), "every provider must fill the whole table"
+    assert usage({"vendor": "kiro", "name": "k"})["err"], \
+        "a provider with no usage surface must say so, not look like an empty account"
     mk = lambda n, w: (" ", n, w, False)
     body, _ = _table([mk("a", {"5h": 10, "7d": 20}), mk("b", {"7d": 30})], 80)
     # a missing window leaves its column empty rather than shifting the next one into it
@@ -856,12 +923,12 @@ CMDS = {"status": cmd_status, "add": cmd_add, "run": cmd_run, "auto": cmd_auto,
         "config": cmd_config, "set": cmd_set, "handoff": cmd_handoff, "check": cmd_check,
         "statusline": cmd_statusline, "install": cmd_install, "env": cmd_env}
 USAGE_TEXT = __doc__ + """
-  oms login <claude|codex>             log in to a new account, then name it
-  oms add <name> <claude|codex> [--dir PATH] [--paid-overflow yes|no]
+  oms login <provider>                 log in to a new account, then name it
+  oms add <name> <provider> [--dir PATH] [--paid-overflow yes|no]
   oms install                          wire usage recording into ~/.claude/settings.json
   oms status                           what every account has left
   oms run [--force] <name> [args...]   launch one account
-  oms auto <claude|codex> [args...]    launch the freest account that can't bill you
+  oms auto <provider> [args...]        launch the freest account that can't bill you
   oms rename <old> <new>               rename an account, keeping its usage history
   oms priority [<name>... | --auto]    show or set the order `oms auto` picks in
   oms config                           every setting, global and per account
