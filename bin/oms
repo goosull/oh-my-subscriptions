@@ -55,6 +55,7 @@ def claude_usage(acct):
     hot = fh if (fh.get("used_percentage") or 0) >= (sd.get("used_percentage") or 0) else sd
     return {"plan": "-", "pct": pct, "resets": hot.get("resets_at"),
             "short_pct": fh.get("used_percentage") if fh else None,
+            "window": "5h" if hot is fh else "7d",
             "age": time.time() - d.get("at", 0),
             "paid_on": bool(acct.get("paid_overflow", True)),
             "detail": f"5h {fh.get('used_percentage', 0):.0f}% / 7d {sd.get('used_percentage', 0):.0f}%"}
@@ -103,7 +104,7 @@ def _codex_scan(acct):
         short = next((w.get("used_percent") for w in (pw, sw)
                       if w and (w.get("window_minutes") or 10**9) <= 360), None)
         return {"plan": rl.get("plan_type", "?"), "pct": pct, "resets": hot.get("resets_at"),
-                "short_pct": short,
+                "short_pct": short, "window": _win(hot.get("window_minutes")),
                 "age": time.time() - f.stat().st_mtime,
                 "paid_on": bool(cr.get("has_credits")) or float(cr.get("balance") or 0) > 0,
                 "detail": _cdetail(pw, sw)}
@@ -291,8 +292,10 @@ def cmd_auto(cfg, args):
 
 # --- status line rendering ---------------------------------------------------
 # One strip, scannable in a glance. The account you are in is bright and shows both its
-# windows; the rest are dim and show their hottest one. Green under 60%, amber above,
-# and red with a leading "!" only where continuing would actually cost money.
+# windows; the rest are dim and show whichever window is binding on them right now.
+# Every meter carries its window label, so a number is never ambiguous about which
+# quota it describes. Green under 60%, amber above, and red with a leading "!" only
+# where continuing would actually cost money.
 
 RESET, DIM, BOLD = "\033[0m", "\033[2m", "\033[1m"
 GREEN, YELLOW, RED = "\033[32m", "\033[33m", "\033[31m"
@@ -362,7 +365,8 @@ def cmd_statusline(cfg, args):
             continue
         b = bool(blocked(a, u, cfg["block_at"]))
         warn = f"{RED}!{RESET}" if b else ""
-        groups.append(f"{warn}{DIM}{a['name']}{RESET} " + _meter(u["pct"], b, 6))
+        groups.append(f"{warn}{DIM}{a['name']}{RESET} "
+                      + _meter(u["pct"], b, 6, u.get("window", "")))
     if groups:
         print(f"  {DIM}│{RESET}  ".join(groups))
 
@@ -481,6 +485,7 @@ def selftest():
     assert rank({"short_pct": 90, "pct": 90}) < rank({"short_pct": None, "pct": 0})
     assert rank({"short_pct": 10, "pct": 99}) < rank({"short_pct": 80, "pct": 5})
     assert rank({"short_pct": None, "pct": 20}) < rank({"short_pct": None, "pct": 70})
+    assert "7d" in _meter(8, False, 6, "7d") and "5h" in _meter(8, False, 6, "5h")
     print("ok")
 
 

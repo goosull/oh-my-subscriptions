@@ -24,8 +24,12 @@ With the status line installed, every account stays visible while you work — t
 you're in with both its windows, the rest with their hottest one:
 
 ```
-claude-main 5h ━━━───── 34%  7d ━━━━━━─ 88%  │  claude-alt ━━──── 31%  │  codex-main ━━━━━━ 97%
+claude-main 5h ━━━───── 34%  7d ━━━━━━─ 88%  │  claude-alt 7d ━━──── 31%  │  codex-main 5h ━━━━━━ 97%
 ```
+
+Every meter is labelled with the window it measures, so a number is never ambiguous.
+Other accounts show whichever of their windows is binding right now — see both with
+`oms status`.
 
 Green under 60%, amber above. **Red, with a leading `!`, means money and only money** —
 a plan with no credit attached can sit at 99% without turning red, because it stops
