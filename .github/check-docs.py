@@ -50,6 +50,22 @@ for skill in sorted(ROOT.glob("skills/*/SKILL.md")):
 print(f"checked {len(known)} commands against the docs: {', '.join(sorted(known))}")
 # Same shape of quiet failure as a skill: a malformed hooks.json means the hook never
 # fires, and a hook that never fires looks like a threshold never reached.
+# The two manifests name the same plugin from opposite ends, and `claude plugin install
+# <name>@<marketplace>` needs them to agree. Renaming the plugin means editing both;
+# editing one leaves an install command that resolves to nothing.
+manifest = json.loads((ROOT / ".claude-plugin" / "plugin.json").read_text())
+market = json.loads((ROOT / ".claude-plugin" / "marketplace.json").read_text())
+listed = [e["name"] for e in market.get("plugins", [])]
+if manifest.get("name") not in listed:
+    bad.append(f".claude-plugin/marketplace.json:1: lists {listed}, but the plugin is "
+               f"named {manifest.get('name')!r} - `plugin install` would find nothing")
+if not re.fullmatch(r"\d+\.\d+\.\d+", manifest.get("version", "")):
+    bad.append(f".claude-plugin/plugin.json:1: version {manifest.get('version')!r} is not "
+               f"x.y.z, and a version that does not sort is a version nobody receives")
+install = f"claude plugin install {manifest['name']}@{market['name']}"
+if install not in (ROOT / "README.md").read_text():
+    bad.append(f"README.md: the install line should read `{install}`")
+
 hooks_file = ROOT / "hooks" / "hooks.json"
 if hooks_file.exists():
     try:
