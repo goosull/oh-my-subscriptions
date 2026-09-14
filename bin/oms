@@ -32,9 +32,20 @@ def load():
             f"  fix it, or move it aside and start over:  mv {CFG} {CFG}.broken")
 
 
+def write_json(path, obj):
+    """Write through a temp file in the same directory, then rename.
+
+    A half-written config is an account list lost. rename is atomic on the same
+    filesystem, so a reader sees either the old file or the new one, never a torn one.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}")
+    tmp.write_text(json.dumps(obj, indent=2))
+    tmp.replace(path)
+
+
 def save(cfg):
-    OMS.mkdir(parents=True, exist_ok=True)
-    CFG.write_text(json.dumps(cfg, indent=2))
+    write_json(CFG, cfg)
 
 
 def find(cfg, name):
@@ -93,9 +104,8 @@ def cached(acct, read):
         pass
     u = read(acct)
     if not u.get("err"):
-        USAGE.mkdir(parents=True, exist_ok=True)
         try:
-            c.write_text(json.dumps({**u, "at": time.time() - u.get("age", 0), "v": CACHE_V}))
+            write_json(c, {**u, "at": time.time() - u.get("age", 0), "v": CACHE_V})
         except OSError:
             pass
     return u
@@ -564,7 +574,15 @@ def _handoff_prompt():
 
 
 def cmd_check(cfg, args):
-    """UserPromptSubmit hook: warn while there is still room to hand off.
+    """UserPromptSubmit hook: warn while there is still room to hand off."""
+    try:
+        _check(cfg, args)
+    except Exception:
+        pass  # a hook that fails must not stand between the user and their prompt
+
+
+def _check(cfg, args):
+    """Warn while there is still room to hand off.
 
     Claude Code offers to switch accounts only once you have already hit the wall, by
     which point there is no budget left to write a brief with. Fire early instead.
@@ -974,6 +992,15 @@ def cmd_statusline(cfg, args):
 
     Any extra args are run as your previous status line and its output is passed through.
     """
+    try:
+        _statusline(cfg, args)
+    except Exception as e:
+        # this renders inside Claude Code on every frame; a traceback in the status bar
+        # helps nobody, and a broken reading is not worth losing the whole strip over
+        print(f"{DIM}oms unavailable ({type(e).__name__}){RESET}")
+
+
+def _statusline(cfg, args):
     raw = sys.stdin.read()
     try:
         d = json.loads(raw)
@@ -986,9 +1013,8 @@ def cmd_statusline(cfg, args):
             if a["vendor"] == "claude" and Path(a["dir"]) == cur:
                 name = a["name"]
     if name and d.get("rate_limits"):
-        USAGE.mkdir(parents=True, exist_ok=True)
-        (USAGE / f"{name}.json").write_text(json.dumps(
-            {"at": time.time(), "rate_limits": d["rate_limits"]}))
+        write_json(USAGE / f"{name}.json", {"at": time.time(),
+                                            "rate_limits": d["rate_limits"]})
     if args:  # chain to whatever status line you had
         p = subprocess.run(args, input=raw, capture_output=True, text=True)
         sys.stdout.write(p.stdout)
@@ -1242,6 +1268,13 @@ def selftest():
     assert all(_coerce(k, "") is None for k in
                ("block_at", "warn_at", "size", "context", "resets_on", "model", "effort"))
     assert _coerce("priority", "a, b") == ["a", "b"]
+    # writes land whole or not at all, and leave no debris behind
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        t = Path(d) / "sub" / "x.json"
+        write_json(t, {"a": 1})
+        assert json.loads(t.read_text()) == {"a": 1}
+        assert [f.name for f in t.parent.iterdir()] == ["x.json"]
     # json.dumps writes bare Infinity, which no other language's parser accepts
     assert "Infinity" not in json.dumps([None if k == float("inf") else k
                                          for k in sel_key({}, {"name": "x"}, {"windows": []})])
