@@ -823,24 +823,26 @@ def cmd_priority(cfg, args):
     order = cfg.get("priority")
     if not order:
         print("priority: automatic - soonest reset first, then smallest pool\n")
-        for v in ("claude", "codex"):
-            ranked = []
-            for a in cfg["accounts"]:
-                if a["vendor"] != v:
-                    continue
-                u = usage(a)
-                if u.get("err"):
-                    continue
-                ranked.append((sel_key(cfg, a, u), a["name"], u))
-            for i, (k, n, u) in enumerate(sorted(ranked, key=lambda t: t[0]), 1):
-                wins = u.get("windows") or []
-                soonest = min((_mins(l) for l, _ in wins), default=None)
-                lab = next((l for l, _ in wins if _mins(l) == soonest), "?")
+        # one width for the whole table, not one per vendor group
+        w = max((len(a["name"]) for a in cfg["accounts"]), default=4)
+        for v in sorted({a["vendor"] for a in cfg["accounts"]}):
+            mine = [a for a in cfg["accounts"] if a["vendor"] == v]
+            ranked = sorted(((sel_key(cfg, a, u), a, u)
+                             for a, u in zip(mine, usage_all(mine)) if not u.get("err")),
+                            key=lambda t: t[0])
+            for i, (k, a, u) in enumerate(ranked, 1):
+                # label and figure must come from the same window - the one the order
+                # is decided on, which is whichever resets soonest
+                soonest = min(u.get("windows") or [("?", 0)], key=lambda x: _mins(x[0]))
+                why = f"resets every {soonest[0]}, {soonest[1]:.0f}% used"
                 sz = k[2] if len(k) > 2 else None
-                why = (f"resets every {lab}, {k[-1]:.0f}% used"
-                       + (f", pool {sz:g}" if isinstance(sz, (int, float))
-                          and sz != float("inf") else ""))
-                print(f"  {v} {i}. {n:<14} {why}")
+                if isinstance(sz, (int, float)) and sz != float("inf"):
+                    why += f", pool {sz:g}"
+                # the order and what it costs you belong on the same line: reading them
+                # off two different commands is how the reserve gets burned by mistake
+                bill = "can bill" if u["paid_on"] else "cannot bill"
+                blk = blocked(a, u, cfg["block_at"])
+                print(f"  {v:<7}{i}. {a['name']:<{w}}  {why:<38} {'BLOCKED' if blk else bill}")
         return
     print("priority: explicit\n  " + "\n  ".join(f"{i}. {n}" for i, n in enumerate(order, 1)))
     print("\n  'oms priority --auto' to go back to the automatic rule")
@@ -1236,6 +1238,10 @@ def selftest():
     # same cadence: the smaller pool is spent first, and an unstated size sorts last
     assert rank(w7, {"size": 100}) < rank(w7, {"size": 5000}) < rank(w7, {})
     assert rank({"windows": [("5h", 99)]}, {"size": 9}) < rank(w7, {"size": 1})
+    # the order is decided on the window that resets soonest, so that is the one to show
+    two = {"windows": [("5h", 10), ("7d", 90)]}
+    assert rank(two)[0] == _mins("5h") and rank(two)[-1] == 10, \
+        "ranking reads the soonest window, not the fullest"
     cfg_ = {"priority": ["b"], "accounts": []}
     assert sel_key(cfg_, {"name": "b"}, {"pct": 99}) < sel_key(cfg_, {"name": "a"}, {"pct": 0}), \
         "an explicitly listed account outranks any unlisted one"
