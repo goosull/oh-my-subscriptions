@@ -12,14 +12,19 @@ to bill you.
 
 ```
 $ oms status
-ACCOUNT      VENDOR PLAN   USED                   RESETS    AS OF  PAID
-codex-main   codex  team   5h 0%  7d 8%  (142/5000 cr)  4d 18h   0m   ON
-codex-alt    codex  pro    7d 58%                       4d 16h   0m   OFF
-kiro-1       kiro   -      30d >=2% (21/1000 cr, cli only) 16d 7h 0m   OFF
+ACCOUNT     VENDOR  PLAN  USED                              RESETS  AS OF  BILLS?
+codex-main  codex   team  5h 18%  7d 11%  (142/5000 cr)     3h 2m   0m     at risk
+codex-alt   codex   pro   7d 60%                            4d 15h  0m     no
+kiro-1      kiro    -     30d >=2% (21/1000 cr, cli only)   16d 7h  0m     no
 
-$ oms auto codex "fix the flaky test"
-oms: codex-alt (7d 58%)
+$ oms auto codex --dry-run
+codex-main  5h 18%  7d 11%  (142/5000 cr)
+$ codex -c model_reasoning_effort="high"
 ```
+
+`BILLS?` is what happens when a plan reaches its ceiling: `no` means it stops and costs
+nothing, `at risk` means paid overflow is on so the ceiling is a charge, and `BLOCKED`
+means `oms` will not launch it.
 
 Other tools rotate accounts when one hits a wall. The point of this one is the wall it
 will not let you walk through: a plan with paid overflow enabled does not stop at its

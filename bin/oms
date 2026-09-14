@@ -23,7 +23,13 @@ def die(msg):
 
 
 def load():
-    return json.loads(CFG.read_text()) if CFG.exists() else {"accounts": [], "block_at": 95}
+    if not CFG.exists():
+        return {"accounts": [], "block_at": 95}
+    try:
+        return json.loads(CFG.read_text())
+    except ValueError as e:
+        die(f"{CFG} is not valid JSON ({e}).\n"
+            f"  fix it, or move it aside and start over:  mv {CFG} {CFG}.broken")
 
 
 def save(cfg):
@@ -402,18 +408,28 @@ def cmd_status(cfg, args):
         return _status_json(cfg)
     if not cfg["accounts"]:
         die(f"no accounts yet. try:  oms login <{'|'.join(PROVIDERS)}>")
-    w = max(max(len(a["name"]) for a in cfg["accounts"]), 7)
-    print(f"{'ACCOUNT':<{w}}  {'VENDOR':<6} {'PLAN':<6} {'USED':<22} {'RESETS':<9} {'AS OF':<6} PAID")
+    rows, blocked_any = [], False
     for a in cfg["accounts"]:
         u = usage(a)
         if u.get("err"):
-            print(f"{a['name']:<{w}}  {a['vendor']:<6} {'-':<6} {('! ' + u['err'])[:22]:<22} {'-':<9} {'-':<6} -")
+            rows.append([a["name"], a["vendor"], "-", "! " + u["err"], "-", "-", "-"])
             continue
         b = blocked(a, u, cfg["block_at"])
-        print(f"{a['name']:<{w}}  {a['vendor']:<6} {u['plan'][:6]:<6} {u['detail']:<22} "
-              f"{_until(u['resets']):<9} {_ago(u.get('age')):<6} "
-              f"{'ON' if u['paid_on'] else 'OFF'}{'  <- BLOCKED' if b else ''}")
-    print("\n'AS OF' is how stale the number is: it updates when you actually use that account.")
+        blocked_any = blocked_any or bool(b)
+        rows.append([a["name"], a["vendor"], (u["plan"] or "-")[:8], u["detail"],
+                     _until(u["resets"]), _ago(u.get("age")),
+                     ("BLOCKED" if b else "at risk") if u["paid_on"] else "no"])
+    head = ["ACCOUNT", "VENDOR", "PLAN", "USED", "RESETS", "AS OF", "BILLS?"]
+    # widths come from the data; a long reading must not shove every later column right
+    w = [max(len(r[i]) for r in [head] + rows) for i in range(len(head))]
+    print("  ".join(h.ljust(w[i]) for i, h in enumerate(head)).rstrip())
+    for r in rows:
+        print("  ".join(c.ljust(w[i]) for i, c in enumerate(r)).rstrip())
+    print("\nAS OF is how stale the reading is. BILLS? is what happens at the ceiling:"
+          "\n  no       the plan stops, and costs nothing"
+          "\n  at risk  paid overflow is on, so the ceiling is a charge, not a stop"
+          "\n  BLOCKED  oms will not launch this account" + (
+              "\n\nrun it anyway with:  oms run --force <name>" if blocked_any else ""))
 
 
 def _status_json(cfg):
@@ -607,6 +623,8 @@ ACCOUNT_KEYS = {
 
 
 def _coerce(key, val):
+    if not val:
+        return None
     if key in ("block_at", "warn_at"):
         if not val.lstrip("-").isdigit():
             die(f"{key} takes a number, got {val!r}")
@@ -624,8 +642,6 @@ def _coerce(key, val):
             die(f"resets_on takes a day of the month, 1-28; got {val!r}")
         return int(val)
     if key == "size":
-        if not val:
-            return None
         try:
             return float(val)
         except ValueError:
@@ -790,8 +806,18 @@ def cmd_priority(cfg, args):
 
 
 def cmd_auto(cfg, args):
-    vendor = args[0] if args and args[0] in PROVIDERS else "claude"
-    rest = args[1:] if args and args[0] in PROVIDERS else args
+    dry = "--dry-run" in args
+    args = [a for a in args if a != "--dry-run"]
+    if args and args[0] in PROVIDERS:
+        vendor, rest = args[0], args[1:]
+    else:
+        # never guess: an unnamed provider used to default to claude and launch it,
+        # so a typo started a session on an account nobody asked for
+        have = sorted({a["vendor"] for a in cfg["accounts"]})
+        if len(have) != 1:
+            die(f"which provider? you have: {', '.join(have) or 'none'}\n"
+                f"  oms auto <{'|'.join(have) or '|'.join(PROVIDERS)}> [args...]")
+        vendor, rest = have[0], args
     cands = []
     for a in cfg["accounts"]:
         if a["vendor"] != vendor:
@@ -803,8 +829,10 @@ def cmd_auto(cfg, args):
     if not cands:
         die(f"no {vendor} account is both known-good and unblocked. run 'oms status'")
     _, best, bu = min(cands, key=lambda t: t[0])
-    why = (f"5h {bu['short_pct']:.0f}%" if bu.get("short_pct") is not None
-           else f"weekly {bu['pct']:.0f}%")
+    why = bu.get("detail") or f"{bu['pct']:.0f}% used"
+    if dry:
+        print(f"{best['name']}  {why}\n$ {' '.join([provider(best)['bin'], *launch_flags(best), *rest])}")
+        return
     print(f"oms: {best['name']} ({why})", file=sys.stderr)
     if "--handoff" in rest:
         rest = [x for x in rest if x != "--handoff"] + [_handoff_prompt()]
@@ -1191,6 +1219,9 @@ def selftest():
     assert _coerce("block_at", "90") == 90 and _coerce("paid_overflow", "no") is False
     assert _coerce("args", "--model opus") == ["--model", "opus"]
     assert _coerce("args", "") is None and _coerce("priority", "auto") is None
+    # an empty value clears any key, including the numeric ones
+    assert all(_coerce(k, "") is None for k in
+               ("block_at", "warn_at", "size", "context", "resets_on", "model", "effort"))
     assert _coerce("priority", "a, b") == ["a", "b"]
     # json.dumps writes bare Infinity, which no other language's parser accepts
     assert "Infinity" not in json.dumps([None if k == float("inf") else k
@@ -1243,7 +1274,8 @@ USAGE_TEXT = __doc__ + """
   oms install                          wire usage recording into ~/.claude/settings.json
   oms status [--json]                  what every account has left
   oms run [--force] <name> [args...]   launch one account
-  oms auto <provider> [args...]        launch the freest account that can't bill you
+  oms auto <provider> [args...]        launch the best account that can't bill you
+  oms auto <provider> --dry-run        say which one, and launch nothing
   oms rename <old> <new>               rename an account, keeping its usage history
   oms priority [<name>... | --auto]    show or set the order `oms auto` picks in
   oms config                           every setting, global and per account
