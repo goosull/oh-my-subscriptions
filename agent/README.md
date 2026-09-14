@@ -1,64 +1,57 @@
 # agent
 
-An agent of our own, assembled rather than written from scratch.
-
-`spine.ts` is the smallest thing that runs: a user turn, a model, a tool that really
-executes, its result fed back, and a closing turn. It uses a mock model, so it needs no
-account and no network.
+An agent whose loop is ours and whose transport is not.
 
 ```bash
-bun install
-bun run spine.ts
+bun install && bun run demo.ts
 ```
 
-## Why these packages
+```
+  step 0 -> cheap:legwork  (spends codex-pro20)
+         shell({"cmd":"uname -s"})
+         => Darwin
+  step 1 -> strong:answer  (spends codex-work)
+         "Darwin — the BSD-derived kernel macOS is built on."
 
-[oh-my-pi](https://github.com/can1357/oh-my-pi) publishes its internals as MIT packages,
-so the expensive layers are already solved:
+engines in this single turn: cheap:legwork -> strong:answer
+```
 
-| | package |
+## The point
+
+One turn, two engines. The cheap one does the tool-calling, the strong one writes the
+answer, and the handover happens **inside** the turn.
+
+That is the reason this loop is written rather than borrowed. Every agent loop on offer
+takes one fixed model per run — `pi-agent-core`'s `agentLoop` has `model: Model` and no
+per-request resolver anywhere in its config — so routing can only happen at turn
+boundaries. `run()` asks the router again before **every** request:
+
+```ts
+route: ({ since, step }) =>
+  step === 0 || since.length === 0 ? cheapEngine : strongEngine
+```
+
+Replacing that stand-in with a real decision — on the shape of the task, on what each
+subscription has left, on what a turn would cost — is the work.
+
+## Layout
+
+| | |
 |---|---|
-| 60+ provider adapters, OAuth, credential vault, usage reporting | `@oh-my-pi/pi-ai` |
-| agent loop, context management, compaction, tokenizer | `@oh-my-pi/pi-agent-core` |
-| model catalog and discovery | `@oh-my-pi/pi-catalog` |
-| differential-rendering terminal UI | `@oh-my-pi/pi-tui` |
+| `src/types.ts` | our vocabulary. No vendor type appears in it |
+| `src/loop.ts` | the loop. 73 lines, and knows nothing about any provider |
+| `src/wire.ts` | the only file that imports `@oh-my-pi/pi-ai` |
+| `src/../oms.ts` | reads `oms status --json` for what each account has left |
 
-Both packages ship their TypeScript sources, so the implementations are readable in
-`node_modules` rather than guessed at.
+`pi-ai` is 109k lines of provider adapters, OAuth and wire formats — work that has
+nothing to do with this idea and would never be worth repeating. It is behind `wire.ts`
+and nothing above that line knows it is there. `pi-agent-core` was dropped once the loop
+existed; the dependency list is one package.
 
-## Routing inside one conversation
+## Not yet true
 
-`route.ts` is the reason this project exists: one conversation, handled by more than one
-provider, without starting over.
-
-```
-> what kernel is this?        routed to provider-a/cheap-1
-> explain why that matters    routed to provider-b/deep-1
-
- user       what kernel is this?
- assistant  [provider-a] bash({"cmd":"uname -s"})
- toolResult Darwin
- assistant  [provider-a] Darwin.
- user       explain why that matters
- assistant  [provider-b] Darwin is the BSD-derived core under macOS.
-```
-
-The second provider reads the first one's tool call and its result as ordinary history.
-That works because `pi-agent-core` keeps a provider-neutral transcript and each provider
-converts it at send time, and because `Agent.setModel` swaps the model in place.
-
-**What nobody supplies is the decision.** `agentLoop` takes one fixed model per run;
-there is no per-turn resolver anywhere in the stack. `route()` is a regex stand-in for
-now, and replacing it is the work: choosing per turn on the shape of the task, what each
-account has left, and what a turn would cost.
-
-Two things the mock cannot tell us, and real providers will: whether tool-call ids,
-thinking signatures and cache breakpoints survive a handoff, and what a swap costs in
-re-sent prompt tokens when the new provider has no warm cache.
-
-## What is ours to write
-
-The router above. The toolset. The system prompt. The permission model — and how little
-context a turn needs, which is what made someone else's agent frustrating to begin with.
-Plus the one thing `oms` already does that no agent here does: refusing to spend money
-you did not agree to spend.
+The demo drives mock engines, so it says nothing about what a real handover costs. Two
+things only real providers can answer: whether tool-call ids, thinking signatures and
+cache breakpoints survive being handed to another provider, and what re-sending a cold
+prompt costs when the new engine has no warm cache. If routing burns more in re-sent
+tokens than it saves, the idea needs a cheaper seam — that measurement comes first.
