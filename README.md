@@ -12,14 +12,10 @@ to bill you.
 
 ```
 $ oms status
-ACCOUNT     VENDOR  PLAN  USED                              RESETS  AS OF  BILLS?
-codex-main  codex   team  5h 18%  7d 11%  (142/5000 cr)     3h 2m   0m     at risk
-codex-alt   codex   pro   7d 60%                            4d 15h  0m     no
-kiro-1      kiro    -     30d >=2% (21/1000 cr, cli only)   16d 7h  0m     no
-
-$ oms auto codex --dry-run
-codex-main  5h 18%  7d 11%  (142/5000 cr)
-$ codex -c model_reasoning_effort="high"
+ACCOUNT     VENDOR  PLAN  USED                              RESETS  ON PACE FOR   AS OF  BILLS?
+codex-main  codex   team  5h 18%  7d 11%  (142/5000 cr)     3h 2m   full in 41m   0m     at risk
+codex-alt   codex   pro   7d 60%                            4d 15h  71% by reset  0m     no
+kiro-1      kiro    -     30d >=2% (21/1000 cr, cli only)   16d 7h  -             0m     no
 ```
 
 `ON PACE FOR` is where the window lands if the last few hours continue. Under 100% is

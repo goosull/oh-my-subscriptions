@@ -108,6 +108,17 @@ for doc in sorted(ROOT.glob("*.md")) + sorted(ROOT.glob("agent/*.md")) + \
         if n > 1:
             bad.append(f"{where}: this sentence appears {n} times, so at least one copy "
                        f"describes an older version of the same thing:\n      {line[:70]}...")
+    # sample output is the first thing anyone reads, and it goes stale every time a
+    # column is added - ON PACE FOR arrived and the README kept the older header
+    for line in text.splitlines():
+        if line.startswith("ACCOUNT") and "VENDOR" in line:
+            shown, real = line.split(), subprocess.run(
+                [sys.executable, str(OMS), "status"], capture_output=True, text=True
+            ).stdout.splitlines()
+            if real and shown != real[0].split():
+                bad.append(f"{where}: the sample status header is\n      {' '.join(shown)}"
+                           f"\n    but the tool prints\n      {real[0].strip()}")
+
     # a line count in prose is true on the day it is written and false soon after
     for m in re.finditer(r"`?(src/)?([\w.-]+\.ts)`?[^\n]{0,40}?(\d{2,4}) lines", text):
         f = ROOT / "agent" / (m.group(1) or "") / m.group(2)
