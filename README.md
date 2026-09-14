@@ -108,7 +108,7 @@ line you already had. Restart Claude Code and the numbers start filling in.
 |---|---|---|
 | claude | `CLAUDE_CONFIG_DIR=<dir>` | `rate_limits` in the [statusLine stdin JSON](https://code.claude.com/docs/en/statusline) |
 | codex | `CODEX_HOME=<dir>` | `rate_limits` in the session rollout files codex writes under that dir |
-| kiro | `KIRO_HOME=<dir>` — settings and sessions only | credits metered per turn in its own session files |
+| kiro | `KIRO_HOME=<dir>` — settings and sessions only | credits metered per turn in its session files — a floor |
 
 Kiro is a partial fit and oms says so rather than pretending. `KIRO_HOME` moves its
 settings and sessions, but not its login: the credential is a single machine-wide
@@ -116,16 +116,19 @@ keychain entry, and a brand new `KIRO_HOME` still reports the account already si
 So Kiro holds **one login at a time** — registering a second Kiro account warns that
 logging into it signs the other out.
 
-Kiro has no usage command either, but it does record what each turn cost, in credits, in
-its own session files. `oms` sums those for the current billing period, so it needs the
-plan's allowance and reset day, which only you know:
+Kiro has no usage command — `user` is only login/logout/whoami, `profile` is for IdC
+accounts, and the real balance lives server-side behind `kiro-cli dashboard`, which just
+opens a browser. What it does leave on disk is the cost of each turn, in credits, so
+`oms` sums those for the current billing period. That needs the plan's allowance and
+reset day, which only you know:
 
 ```bash
 oms set kiro size=1000 resets_on=1
 ```
 
-That counts CLI turns made through this profile. Anything you spend in the Kiro IDE or
-on the web is invisible to it, so read the figure as a floor, not a total.
+The result is reported as `>=`, because it is a floor rather than a balance: it counts
+only CLI turns made through this profile, so Kiro IDE and web spend is invisible to it,
+and it goes stale if sessions are pruned. Clear `size` to stop tracking it at all.
 
 A provider you have not installed is still a provider. `oms login kiro` offers to
 install the CLI first and then logs you in:

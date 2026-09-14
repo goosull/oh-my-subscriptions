@@ -130,10 +130,14 @@ def _win(mins):
 
 
 # --- usage: kiro --------------------------------------------------------------
-# kiro-cli records what each turn cost in its own session files, under
-# session_state.conversation_metadata.user_turn_metadatas[].metering_usage, as credits.
-# That is consumption, not a balance, so the plan's allowance has to be declared with
-# `oms set <account> size=N` before a percentage means anything.
+# kiro-cli has no usage command - `user` is only login/logout/whoami, `profile` is for
+# IdC accounts, and the real balance lives server-side behind `kiro-cli dashboard`, which
+# just opens a browser. What it does leave on disk is the cost of each turn, in credits,
+# under session_state.conversation_metadata.user_turn_metadatas[].metering_usage.
+#
+# Summing those is a floor, not a balance: it counts only CLI turns made through this
+# profile, so IDE and web spend is invisible, and it goes stale if sessions are pruned.
+# It is reported with a leading ">=" so it is never mistaken for the real figure.
 
 def kiro_usage(acct):
     size = acct.get("size")
@@ -160,7 +164,8 @@ def kiro_usage(acct):
     return {"plan": "-", "pct": pct, "resets": _period_end(acct.get("resets_on", 1)),
             "short_pct": None, "window": "30d", "windows": [("30d", pct)],
             "age": 0, "paid_on": bool(acct.get("paid_overflow", False)),
-            "detail": f"30d {pct:.0f}%  ({used:.1f}/{size:g} credits)"}
+            "floor": True,
+            "detail": f"30d >={pct:.0f}% ({used:.1f}/{size:g} cr, cli only)"}
 
 
 def _period_start(day):
