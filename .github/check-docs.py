@@ -7,6 +7,8 @@ looking. This looks.
 
     python3 .github/check-docs.py
 """
+import json
+import os
 import pathlib
 import re
 import subprocess
@@ -46,8 +48,32 @@ for skill in sorted(ROOT.glob("skills/*/SKILL.md")):
             bad.append(f"{where}:1: unknown frontmatter key {k!r}")
 
 print(f"checked {len(known)} commands against the docs: {', '.join(sorted(known))}")
+# Same shape of quiet failure as a skill: a malformed hooks.json means the hook never
+# fires, and a hook that never fires looks like a threshold never reached.
+hooks_file = ROOT / "hooks" / "hooks.json"
+if hooks_file.exists():
+    try:
+        hooks = json.loads(hooks_file.read_text()).get("hooks", {})
+    except ValueError as e:
+        hooks, _ = {}, bad.append(f"hooks/hooks.json:1: not valid JSON ({e})")
+    for event, entries in hooks.items():
+        for entry in entries:
+            for hook in entry.get("hooks", []):
+                cmd = hook.get("command", "")
+                if not cmd:
+                    bad.append(f"hooks/hooks.json:1: {event} has a hook with no command")
+                    continue
+                # ${CLAUDE_PLUGIN_ROOT} is the plugin root, which is this repository
+                target = cmd.replace("${CLAUDE_PLUGIN_ROOT}/", "").split()[0]
+                if not (ROOT / target).exists():
+                    bad.append(f"hooks/hooks.json:1: {event} runs {target}, "
+                               f"which is not in this repository")
+                elif not os.access(ROOT / target, os.X_OK):
+                    bad.append(f"hooks/hooks.json:1: {target} is not executable")
+    print(f"checked {sum(len(v) for v in hooks.values())} hook(s)")
+
 print(f"checked {len(list(ROOT.glob('skills/*/SKILL.md')))} skills")
 if bad:
     print("\n" + "\n".join(bad))
     sys.exit(f"\n{len(bad)} problem(s) above")
-print("every documented command exists, and every skill will load")
+print("everything documented exists, and everything installed will load")
