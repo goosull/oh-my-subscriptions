@@ -7,13 +7,11 @@ bun install && bun run demo.ts
 ```
 
 ```
-  step 0 -> cheap:legwork  (spends codex-pro20)
-         shell({"cmd":"uname -s"})
-         => Darwin
-  step 1 -> strong:answer  (spends codex-work)
-         "Darwin — the BSD-derived kernel macOS is built on."
-
-engines in this single turn: cheap:legwork -> strong:answer
+  step 0  legwork  -> codex-pro20  (60% used, cannot bill)
+            shell({"cmd":"uname -s"})
+            => Darwin
+  step 1  answer   -> codex-work   (18% used, can bill)
+            "Darwin — the BSD-derived kernel macOS is built on."
 ```
 
 ## The point
@@ -31,8 +29,14 @@ route: ({ since, step }) =>
   step === 0 || since.length === 0 ? cheapEngine : strongEngine
 ```
 
-Replacing that stand-in with a real decision — on the shape of the task, on what each
-subscription has left, on what a turn would cost — is the work.
+The transport is mocked, so this runs with no account. The decision is not: `oms status
+--json` is asked which subscription has room and which would start charging, and the
+router picks on that. Repetitive legwork goes to a plan that cannot bill, and the one
+request that matters is allowed onto a plan that can — but only while oms still calls it
+safe, and it falls back rather than forcing it.
+
+Splitting it that way is deliberate. Routing is the part worth getting right, and it can
+be exercised long before a model is attached.
 
 ## Layout
 

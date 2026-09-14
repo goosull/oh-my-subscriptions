@@ -1,8 +1,13 @@
-// One turn, two engines. The cheap one does the legwork, the strong one writes the
-// answer — and the handover happens *inside* the turn, not between turns.
+// One turn, two engines, and the choice made on real subscriptions.
+//
+// The transport is mocked because this needs no account to run. The *decision* is not:
+// `oms status --json` is asked which subscription has room and which would start
+// charging, and the router picks on that. That split is deliberate — the routing is the
+// part worth getting right, and it can be exercised long before a model is attached.
 import { createMockModel } from "@oh-my-pi/pi-ai";
+import { accounts, type Account } from "./oms";
 import { run } from "./src/loop";
-import type { Engine, Entry, Tool } from "./src/types";
+import type { Ask, Engine, Entry, Tool } from "./src/types";
 import { sender } from "./src/wire";
 
 const shell: Tool = {
@@ -16,34 +21,62 @@ const shell: Tool = {
 };
 
 const mocks: Record<string, any> = {
-  "cheap:legwork": createMockModel({
-    id: "legwork", provider: "cheap",
+  legwork: createMockModel({
+    id: "legwork", provider: "mock",
     responses: [{ content: [{ type: "toolCall", name: "shell", arguments: { cmd: "uname -s" } }] }],
   }),
-  "strong:answer": createMockModel({
-    id: "answer", provider: "strong",
+  answer: createMockModel({
+    id: "answer", provider: "mock",
     responses: [{ content: ["Darwin — the BSD-derived kernel macOS is built on."] }],
   }),
 };
 
+// Two roles. Legwork is repetitive and cheap; the answer is written once and matters.
+type Role = "legwork" | "answer";
+const roleFor = ({ since, step }: Ask): Role =>
+  step === 0 || since.length === 0 ? "legwork" : "answer";
+
+const spendable = accounts().filter(a => a.available);
+
+/**
+ * Back a role with a real subscription.
+ *
+ * Legwork goes to whatever has the most room and cannot bill. The answer prefers an
+ * account that can bill, since it is one request and the good model is worth it — but
+ * only one oms still considers safe, and it falls back rather than forcing it.
+ */
+function back(role: Role): Account | undefined {
+  const free = spendable.filter(a => !a.pays_on_overflow);
+  if (role === "legwork") return free[0] ?? spendable[0];
+  return spendable.find(a => a.pays_on_overflow) ?? free[0];
+}
+
+const route = (ask: Ask): Engine => {
+  const role = roleFor(ask);
+  const acct = back(role);
+  return { id: role, account: acct?.name };
+};
+
+if (!spendable.length) {
+  console.log("no subscription has room right now — `oms status` says why");
+  process.exit(0);
+}
+
 const loop = {
   system: ["Be terse."],
   tools: [shell],
-  // The decision, asked before every request. Step 0 has nothing to reason about yet,
-  // so it goes cheap; once a tool has answered, the synthesis goes to the strong engine.
-  route: ({ since, step }): Engine =>
-    step === 0 || since.length === 0
-      ? { id: "cheap:legwork", account: "codex-pro20" }
-      : { id: "strong:answer", account: "codex-work" },
+  route,
   open: (engine: Engine) => sender(engine, mocks[engine.id].model, mocks[engine.id].stream),
 };
 
 const transcript: Entry[] = [];
 for await (const ev of run(loop as any, transcript, "what kernel is this?")) {
-  if (ev.at === "routed") console.log(`  step ${ev.step} -> ${ev.engine.id}  (spends ${ev.engine.account})`);
-  if (ev.at === "call") console.log(`         ${ev.call.tool}(${JSON.stringify(ev.call.input)})`);
-  if (ev.at === "result") console.log(`         => ${ev.result}`);
-  if (ev.at === "text") console.log(`         "${ev.chunk}"`);
+  if (ev.at === "routed") {
+    const a = spendable.find(x => x.name === ev.engine.account);
+    const note = a ? `${a.used_percent?.toFixed(0)}% used, ${a.pays_on_overflow ? "can bill" : "cannot bill"}` : "no account";
+    console.log(`  step ${ev.step}  ${ev.engine.id.padEnd(8)} -> ${(ev.engine.account ?? "-").padEnd(12)} (${note})`);
+  }
+  if (ev.at === "call") console.log(`            ${ev.call.tool}(${JSON.stringify(ev.call.input)})`);
+  if (ev.at === "result") console.log(`            => ${ev.result}`);
+  if (ev.at === "text") console.log(`            "${ev.chunk}"`);
 }
-console.log("\nengines in this single turn:",
-  [...new Set(transcript.filter(e => e.from === "model").map((e: any) => e.by.id))].join(" -> "));
