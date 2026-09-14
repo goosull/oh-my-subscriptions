@@ -398,6 +398,8 @@ def blocked(acct, u, block_at):
 # --- commands -----------------------------------------------------------------
 
 def cmd_status(cfg, args):
+    if "--json" in args:
+        return _status_json(cfg)
     if not cfg["accounts"]:
         die(f"no accounts yet. try:  oms login <{'|'.join(PROVIDERS)}>")
     w = max(max(len(a["name"]) for a in cfg["accounts"]), 7)
@@ -412,6 +414,38 @@ def cmd_status(cfg, args):
               f"{_until(u['resets']):<9} {_ago(u.get('age')):<6} "
               f"{'ON' if u['paid_on'] else 'OFF'}{'  <- BLOCKED' if b else ''}")
     print("\n'AS OF' is how stale the number is: it updates when you actually use that account.")
+
+
+def _status_json(cfg):
+    """Machine-readable status, already in pick order and already judged.
+
+    Anything consuming this - a router in another language, a script, a status bar -
+    should not have to re-derive which account is safe or which comes first. The
+    ordering and the `blocked` reason are the policy; everything else is the reading.
+    """
+    rows = []
+    for a in cfg["accounts"]:
+        u = usage(a)
+        row = {"name": a["name"], "vendor": a["vendor"], "dir": a["dir"],
+               "bin": provider(a)["bin"], "installed": installed(a["vendor"]),
+               "flags": launch_flags(a)}
+        if u.get("err"):
+            row.update(available=False, reason=u["err"])
+        else:
+            b = blocked(a, u, cfg["block_at"])
+            row.update(available=not b, blocked=b, plan=u.get("plan"),
+                       used_percent=u["pct"], windows=[{"window": w, "used_percent": p}
+                                                       for w, p in u.get("windows") or []],
+                       resets_at=u.get("resets"), pays_on_overflow=u["paid_on"],
+                       floor=bool(u.get("floor")),
+                       key=[None if isinstance(k, float) and k == float("inf") else k
+                            for k in sel_key(cfg, a, u)])
+        rows.append(row)
+    rows.sort(key=lambda r: (not r.get("available"),
+                             [float("inf") if k is None else k for k in r.get("key") or [9]]))
+    print(json.dumps({"block_at": cfg["block_at"],
+                      "warn_at": cfg.get("warn_at", min(cfg["block_at"], 95) - 10),
+                      "priority": cfg.get("priority"), "accounts": rows}, indent=2))
 
 
 def cmd_add(cfg, args):
@@ -1158,6 +1192,9 @@ def selftest():
     assert _coerce("args", "--model opus") == ["--model", "opus"]
     assert _coerce("args", "") is None and _coerce("priority", "auto") is None
     assert _coerce("priority", "a, b") == ["a", "b"]
+    # json.dumps writes bare Infinity, which no other language's parser accepts
+    assert "Infinity" not in json.dumps([None if k == float("inf") else k
+                                         for k in sel_key({}, {"name": "x"}, {"windows": []})])
     # one setting, each vendor's own spelling
     assert launch_flags({"vendor": "claude", "effort": "high"}) == ["--effort", "high"]
     assert launch_flags({"vendor": "codex", "effort": "high"}) == \
@@ -1204,7 +1241,7 @@ USAGE_TEXT = __doc__ + """
   oms remove <name> [--purge]          unregister an account
   oms add <name> <provider> [--dir PATH] [--paid-overflow yes|no]
   oms install                          wire usage recording into ~/.claude/settings.json
-  oms status                           what every account has left
+  oms status [--json]                  what every account has left
   oms run [--force] <name> [args...]   launch one account
   oms auto <provider> [args...]        launch the freest account that can't bill you
   oms rename <old> <new>               rename an account, keeping its usage history
