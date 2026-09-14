@@ -1315,7 +1315,61 @@ def selftest():
     # an account with nothing to meter keeps its row and says why
     noted, _ = _table([mk("a", {"7d": 5}), mk("b", "no usage")], 80)
     assert "no usage" in noted[1] and noted[1].startswith("b")
+    _guard_holds()
     print("ok")
+
+
+def _guard_holds():
+    """The whole point, exercised end to end: a launch that would bill must not happen.
+
+    `blocked()` was tested in isolation, which proves the judgement and not that anything
+    obeys it. These drive cmd_run and cmd_auto with the launch intercepted, so a future
+    refactor that drops the check fails here instead of on somebody's bill.
+    """
+    global usage, usage_all
+    real_usage, real_all, launched = usage, usage_all, []
+    at_risk = {"name": "risky", "vendor": "codex", "dir": "/tmp", "paid_overflow": True}
+    safe = {"name": "safe", "vendor": "codex", "dir": "/tmp"}
+    cfg = {"accounts": [at_risk, safe], "block_at": 95}
+    readings = {
+        "risky": reading([("7d", 99)], paid_on=True),   # over the line and billable
+        "safe": reading([("7d", 99)], paid_on=False),   # equally full, but free
+    }
+    usage = lambda a: readings[a["name"]]
+    usage_all = lambda accounts: [readings[a["name"]] for a in accounts]
+    real_exec, os.execvpe = os.execvpe, lambda f, a, e: launched.append(a)
+    real_die, exits = die, []
+
+    def fake_die(msg):
+        exits.append(msg)
+        raise SystemExit(1)
+
+    globals()["die"] = fake_die
+    try:
+        assert blocked(at_risk, readings["risky"], 95), "99% on a billable plan is blocked"
+        assert not blocked(safe, readings["safe"], 95), "a plan that cannot bill is never blocked"
+
+        try:
+            cmd_run(cfg, ["risky"])
+        except SystemExit:
+            pass
+        assert not launched, "cmd_run launched an account that would bill"
+        assert exits and "blocked" in exits[-1]
+
+        cmd_run(cfg, ["risky"], check=False)
+        assert launched, "--force must still launch"
+
+        launched.clear()
+        quiet, sys.stderr = sys.stderr, open(os.devnull, "w")
+        try:
+            cmd_auto(cfg, ["codex"])
+        finally:
+            sys.stderr.close()
+            sys.stderr = quiet
+        assert launched and "safe" not in str(exits[-1:]), "auto must route around the blocked one"
+    finally:
+        usage, usage_all, os.execvpe = real_usage, real_all, real_exec
+        globals()["die"] = real_die
 
 
 CMDS = {"status": cmd_status, "add": cmd_add, "run": cmd_run, "auto": cmd_auto,
