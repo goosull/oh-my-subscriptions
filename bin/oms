@@ -80,7 +80,7 @@ def claude_usage(acct):
 
 # Bump whenever the shape of a usage dict changes, so a cache written by an older
 # build is discarded instead of quietly serving a record with fields missing.
-CACHE_V = 5
+CACHE_V = 6
 CACHE_TTL = 60
 
 
@@ -202,16 +202,21 @@ def _cdetail(pw, sw):
 def reading(windows, *, plan="-", resets=None, paid_on=False, age=0, detail=None, **extra):
     """The one definition of a usage reading. Every provider goes through here.
 
-    `windows` is [(label, used_percent)] and everything derived from it - which window
-    is binding, which one expires soonest, the headline figure - is derived here once.
-    Four providers deriving it themselves is how `short_pct` came to mean three
-    different things, and how `size` and `floor` ended up on one reading each.
+    `windows` is [(label, used_percent)] and the two that matter are named, because
+    they are different windows and confusing them is this file's favourite mistake:
+
+      binding  the fullest one - what will stop you first, so it is the headline
+      soonest  the one that resets first - what evaporates if you do not spend it,
+               so it is what the pick order runs on
+
+    Deriving either anywhere else is how the same bug arrived three times.
     """
     wins = [(l, float(p or 0)) for l, p in windows]
-    hot = max(wins, key=lambda w: w[1], default=("?", 0.0))
-    short = next((p for l, p in wins if _mins(l) <= 360), None)
-    return {"plan": plan or "-", "pct": hot[1], "window": hot[0], "windows": wins,
-            "short_pct": short, "resets": resets, "paid_on": bool(paid_on), "age": age,
+    binding = max(wins, key=lambda w: w[1], default=("?", 0.0))
+    soonest = min(wins, key=lambda w: _mins(w[0]), default=("?", 0.0))
+    return {"plan": plan or "-", "pct": binding[1], "window": binding[0], "windows": wins,
+            "binding": list(binding), "soonest": list(soonest),
+            "resets": resets, "paid_on": bool(paid_on), "age": age,
             "detail": detail if detail is not None else "  ".join(f"{l} {p:.0f}%" for l, p in wins),
             **extra}
 
@@ -793,11 +798,9 @@ def rank(u, acct=None):
     is worth less held back. Pool size is whatever `size` you set on the account; oms
     cannot read it, because neither vendor reports an absolute quota.
     """
-    wins = u.get("windows") or []
-    soonest = min((_mins(l) for l, _ in wins), default=10 ** 9)
+    label, pct = u.get("soonest") or ("?", u.get("pct", 0))
     size = u.get("size") if u.get("size") is not None else (acct or {}).get("size")
-    pct = next((p for l, p in wins if _mins(l) == soonest), u.get("pct", 0))
-    return (soonest, size if size is not None else float("inf"), pct)
+    return (_mins(label), size if size is not None else float("inf"), pct)
 
 
 def sel_key(cfg, acct, u):
@@ -831,10 +834,8 @@ def cmd_priority(cfg, args):
                              for a, u in zip(mine, usage_all(mine)) if not u.get("err")),
                             key=lambda t: t[0])
             for i, (k, a, u) in enumerate(ranked, 1):
-                # label and figure must come from the same window - the one the order
-                # is decided on, which is whichever resets soonest
-                soonest = min(u.get("windows") or [("?", 0)], key=lambda x: _mins(x[0]))
-                why = f"resets every {soonest[0]}, {soonest[1]:.0f}% used"
+                lab, used = u["soonest"]
+                why = f"resets every {lab}, {used:.0f}% used"
                 sz = k[2] if len(k) > 2 else None
                 if isinstance(sz, (int, float)) and sz != float("inf"):
                     why += f", pool {sz:g}"
@@ -1231,19 +1232,20 @@ def selftest():
     assert _win(10080) == "7d" and _win(300) == "5h" and _win(None) == "?"
     assert _until(time.time() + 7260).startswith("2h") and _until(0) == "-"
     assert _until(time.time() - 5) == "now"
-    w5, w7 = {"windows": [("5h", 90)]}, {"windows": [("7d", 0)]}
+    w5, w7 = reading([("5h", 90)]), reading([("7d", 0)])
     # a window that resets sooner outranks a longer one, however empty the longer one is
     assert rank(w5) < rank(w7)
-    assert rank({"windows": [("5h", 10)]}) < rank({"windows": [("5h", 80)]})
+    assert rank(reading([("5h", 10)])) < rank(reading([("5h", 80)]))
     # same cadence: the smaller pool is spent first, and an unstated size sorts last
     assert rank(w7, {"size": 100}) < rank(w7, {"size": 5000}) < rank(w7, {})
-    assert rank({"windows": [("5h", 99)]}, {"size": 9}) < rank(w7, {"size": 1})
+    assert rank(reading([("5h", 99)]), {"size": 9}) < rank(w7, {"size": 1})
     # the order is decided on the window that resets soonest, so that is the one to show
-    two = {"windows": [("5h", 10), ("7d", 90)]}
+    two = reading([("5h", 10), ("7d", 90)])
     assert rank(two)[0] == _mins("5h") and rank(two)[-1] == 10, \
         "ranking reads the soonest window, not the fullest"
     cfg_ = {"priority": ["b"], "accounts": []}
-    assert sel_key(cfg_, {"name": "b"}, {"pct": 99}) < sel_key(cfg_, {"name": "a"}, {"pct": 0}), \
+    assert sel_key(cfg_, {"name": "b"}, reading([("7d", 99)])) < \
+        sel_key(cfg_, {"name": "a"}, reading([("7d", 0)])), \
         "an explicitly listed account outranks any unlisted one"
     assert _wide(_meter(8, False)) == _wide(_meter(80, False)), \
         "a one-digit and a two-digit reading must occupy the same width, or columns jitter"
@@ -1263,9 +1265,9 @@ def selftest():
     assert _session_line({}, 60) is None
     assert _mins("5h") < _mins("7d") < _mins("zz"), "columns run shortest window first"
     r = reading([("5h", 12), ("7d", 40)], plan="pro", paid_on=True)
-    assert r["pct"] == 40 and r["window"] == "7d", "the headline is the binding window"
-    assert r["short_pct"] == 12, "the short window is the one that expires, not the worst"
-    assert reading([("30d", 5)])["short_pct"] is None, "a monthly pool has no short window"
+    assert r["binding"] == ["7d", 40] and r["pct"] == 40, "the headline is the fullest"
+    assert r["soonest"] == ["5h", 12], "the order runs on the one that resets first"
+    assert reading([("30d", 5)])["soonest"] == ["30d", 5]
     assert reading([])["pct"] == 0 and reading([])["windows"] == []
     assert set(reading([("7d", 1)])) == set(reading([("5h", 1)], size=9)) - {"size"}, \
         "every reading carries the same fields whoever produced it"
@@ -1293,7 +1295,7 @@ def selftest():
         assert [f.name for f in t.parent.iterdir()] == ["x.json"]
     # json.dumps writes bare Infinity, which no other language's parser accepts
     assert "Infinity" not in json.dumps([None if k == float("inf") else k
-                                         for k in sel_key({}, {"name": "x"}, {"windows": []})])
+                                         for k in sel_key({}, {"name": "x"}, reading([]))])
     # one setting, each vendor's own spelling
     assert launch_flags({"vendor": "claude", "effort": "high"}) == ["--effort", "high"]
     assert launch_flags({"vendor": "codex", "effort": "high"}) == \
