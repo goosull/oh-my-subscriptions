@@ -420,6 +420,7 @@ def cmd_auto(cfg, args):
 # in a grid whose columns line up, so a wrap reads as a table rather than as an
 # accident. Green under 60%, amber above, and red only where continuing costs money.
 
+BAR = 8
 RESET, DIM, BOLD = "\033[0m", "\033[2m", "\033[1m"
 GREEN, YELLOW, RED = "\033[32m", "\033[33m", "\033[31m"
 GAP = "   "
@@ -434,48 +435,20 @@ def _tone(pct, is_blocked):
 
 
 def _bar(pct, width, colour):
-    """Filled run in colour, remainder as a thinner rule so it reads without colour too."""
+    """Filled run in colour against an outline, so it reads without colour too."""
     filled = max(0, min(width, round(pct / 100 * width)))
-    return f"{colour}{'━' * filled}{RESET}{DIM}{'─' * (width - filled)}{RESET}"
+    return f"{colour}{'▰' * filled}{RESET}{DIM}{'▱' * (width - filled)}{RESET}"
 
 
-def _meter(pct, blocked_, width, label=""):
+def _meter(pct, blocked_, width=BAR):
     c = _tone(pct, blocked_)
-    lab = f"{DIM}{label}{RESET} " if label else ""
-    return f"{lab}{_bar(pct, width, c)} {c}{pct:>3.0f}%{RESET}"
+    return f"{_bar(pct, width, c)} {c}{pct:>3.0f}%{RESET}"
 
 
 def _tokens(n):
     if not n:
         return "?"
     return f"{n // 1000000}M" if n >= 1000000 else f"{n // 1000}K"
-
-
-def _session_line(d):
-    """Model, effort and context headroom - the things that change under you mid-task."""
-    mdl = (d.get("model") or {}).get("display_name") or (d.get("model") or {}).get("id")
-    if not mdl:
-        return None
-    cw = d.get("context_window") or {}
-    size = cw.get("context_window_size")
-    # "Opus 5 (1M context)" states the window in the name, and the ctx segment states it
-    # again. Keep the segment, which is where the live number already is, and drop the
-    # parenthetical from the name.
-    if size:
-        mdl = re.sub(r"\s*\([^)]*\)\s*$", "", mdl) or mdl
-    bits = [f"{BOLD}{mdl}{RESET}"]
-    if (d.get("effort") or {}).get("level"):
-        bits.append(f"{DIM}{d['effort']['level']}{RESET}")
-    left = cw.get("remaining_percentage")
-    if left is None and cw.get("used_percentage") is not None:
-        left = 100 - cw["used_percentage"]
-    if left is not None:
-        c = RED if left < 15 else (YELLOW if left < 35 else GREEN)
-        of = f"{DIM} of {_tokens(size)}{RESET}" if size else ""
-        bits.append(f"{DIM}ctx{RESET} {_bar(100 - left, 9, c)} {c}{left:.0f}%{RESET}{of}")
-    elif size:
-        bits.append(f"{DIM}{_tokens(size)} context{RESET}")
-    return f"{GAP}".join(bits)
 
 
 def _wide(t):
@@ -486,26 +459,63 @@ def _pad(t, w):
     return t + " " * max(0, w - _wide(t))
 
 
-def _grid(chips, columns, max_rows=3):
-    """Lay the accounts out as a grid: equal-width cells, columns that line up.
+def _mins(label):
+    """Order columns shortest window first; unparsable labels sort last."""
+    try:
+        n, unit = int(label[:-1]), label[-1]
+    except ValueError:
+        return 10 ** 9
+    return n * {"h": 60, "d": 1440}.get(unit, 10 ** 9)
 
-    A greedy fill leaves whatever did not fit alone on the last row, which reads as a
-    mistake. Pick the column count from the widest cell, then balance the rows so the
-    last one is never a lone orphan. The status line cannot scroll, so anything past
-    max_rows collapses into a count rather than being silently truncated.
+
+def _session_line(d, width):
+    """Model, effort and context headroom - the things that change under you mid-task."""
+    mdl = (d.get("model") or {}).get("display_name") or (d.get("model") or {}).get("id")
+    if not mdl:
+        return None
+    cw = d.get("context_window") or {}
+    size = cw.get("context_window_size")
+    # "Opus 5 (1M context)" states the window in the name and the ctx segment states it
+    # again. Keep the segment, where the live number already is, and drop the parenthetical.
+    if size:
+        mdl = re.sub(r"\s*\([^)]*\)\s*$", "", mdl) or mdl
+    left = f"{BOLD}{mdl}{RESET}"
+    if (d.get("effort") or {}).get("level"):
+        left += f"  {DIM}{d['effort']['level']}{RESET}"
+    rem = cw.get("remaining_percentage")
+    if rem is None and cw.get("used_percentage") is not None:
+        rem = 100 - cw["used_percentage"]
+    if rem is None:
+        return left + (f"  {DIM}{_tokens(size)} context{RESET}" if size else "")
+    c = RED if rem < 15 else (YELLOW if rem < 35 else GREEN)
+    right = (f"{DIM}ctx{RESET} {_bar(rem, 10, c)} {c}{rem:.0f}% left{RESET}"
+             + (f"{DIM} of {_tokens(size)}{RESET}" if size else ""))
+    gap = max(2, width - _wide(left) - _wide(right))
+    return left + " " * gap + right
+
+
+def _table(rows, columns, max_rows=4):
+    """One account per row; each window gets a column, shortest first.
+
+    The column a meter sits in says which window it is, so the 5h / 7d labels that were
+    repeated against every account come out entirely. Cells are a fixed width, so the
+    columns line up down the table however many accounts there are.
     """
-    if not chips:
-        return []
-    w = max(_wide(c) for c in chips)
-    ncols = max(1, min(len(chips), (columns + len(GAP)) // (w + len(GAP))))
-    nrows = min(max_rows, -(-len(chips) // ncols))
-    # spread evenly instead of packing rows full and stranding the remainder
-    ncols = -(-min(len(chips), nrows * ncols) // nrows)
-    shown, extra = chips[:nrows * ncols], len(chips) - nrows * ncols
+    if not rows:
+        return [], 0
+    labels = sorted({l for _, _, wins, _ in rows for l in wins}, key=_mins)
+    name_w = max(_wide(n) for _, n, _, _ in rows)
+    cell_w = BAR + 5
+    extra = len(rows) - max_rows
     if extra > 0:
-        shown[-1] = f"{DIM}+{extra} more{RESET}"
-    rows = [shown[i:i + ncols] for i in range(0, len(shown), ncols)]
-    return [GAP.join(_pad(c, w) for c in r).rstrip() for r in rows]
+        rows = rows[:max_rows]
+    out = []
+    for mark, name, wins, blocked_ in rows:
+        cells = [_pad(_meter(wins[l], blocked_) if l in wins else "", cell_w) for l in labels]
+        out.append(f"{mark} {_pad(name, name_w)}  " + " ".join(cells).rstrip())
+    if extra > 0:
+        out[-1] = f"{DIM}  +{extra} more account{'s' if extra > 1 else ''}{RESET}"
+    return out, 2 + name_w + 2 + len(labels) * (cell_w + 1) - 1
 
 
 def cmd_statusline(cfg, args):
@@ -535,14 +545,16 @@ def cmd_statusline(cfg, args):
 
     here = cfg_find_self(cfg, name)
     rl = d.get("rate_limits") or {}
-    live = [(l, (rl.get(k) or {}).get("used_percentage") or 0)
-            for k, l in (("five_hour", "5h"), ("seven_day", "7d")) if rl.get(k)]
+    live = {l: (rl.get(k) or {}).get("used_percentage") or 0
+            for k, l in (("five_hour", "5h"), ("seven_day", "7d")) if rl.get(k)}
 
-    chips = []
+    rows = []
     if live:  # the running session is authoritative for its own account
         limit = (here or {}).get("block_at", cfg["block_at"])
         paid = (here or {}).get("paid_overflow", True)
-        chips.append(_cell(name or "claude", live, lambda p: paid and p >= limit, True))
+        bad = paid and max(live.values()) >= limit
+        rows.append((f"{RED}!{RESET}" if bad else f"{GREEN}▸{RESET}",
+                     f"{BOLD}{name or 'claude'}{RESET}", live, bad))
     rest = []
     for a in cfg["accounts"]:
         if a["name"] == name:
@@ -554,19 +566,13 @@ def cmd_statusline(cfg, args):
                      sel_key(cfg, a, u), a, u))
     for *_, a, u in sorted(rest, key=lambda t: t[:3]):
         b = bool(blocked(a, u, cfg["block_at"]))
-        chips.append(_cell(a["name"], u["windows"], lambda p, b=b: b, False))
+        rows.append((f"{RED}!{RESET}" if b else " ",
+                     f"{DIM}{a['name']}{RESET}", dict(u["windows"]), b))
 
-    cols = int(os.environ.get("COLUMNS") or 80)
-    out = [x for x in [_session_line(d)] if x] + _grid(chips, cols)
-    for row in out:
-        print(row)
-
-
-def _cell(label, windows, is_blocked, active):
-    meters = "  ".join(_meter(p, is_blocked(p), 5, lab) for lab, p in windows)
-    warn = f"{RED}!{RESET}" if any(is_blocked(p) for _, p in windows) else ""
-    name = f"{BOLD}{label}{RESET}" if active else f"{DIM}{label}{RESET}"
-    return f"{warn}{name} {meters}"
+    body, width = _table(rows, int(os.environ.get("COLUMNS") or 80))
+    head = _session_line(d, width)
+    for line in ([head] if head else []) + body:
+        print(line)
 
 
 def cfg_find_self(cfg, name):
@@ -686,28 +692,29 @@ def selftest():
     cfg_ = {"priority": ["b"], "accounts": []}
     assert sel_key(cfg_, {"name": "b"}, {"pct": 99}) < sel_key(cfg_, {"name": "a"}, {"pct": 0}), \
         "an explicitly listed account outranks any unlisted one"
-    assert _wide(_meter(8, False, 5, "7d")) == _wide(_meter(80, False, 5, "7d")), \
+    assert _wide(_meter(8, False)) == _wide(_meter(80, False)), \
         "a one-digit and a two-digit reading must occupy the same width, or columns jitter"
-    assert "7d" in _meter(8, False, 6, "7d") and "5h" in _meter(8, False, 6, "5h")
     assert _wide(f"{RED}abc{RESET}") == 3, "width must ignore colour escapes"
     assert _tokens(1000000) == "1M" and _tokens(200000) == "200K" and _tokens(None) == "?"
     c = _session_line({"model": {"display_name": "Opus"}, "effort": {"level": "high"},
-                       "context_window": {"context_window_size": 1000000, "used_percentage": 34}})
-    assert "Opus" in c and "high" in c and "1M" in c and "66%" in c
+                       "context_window": {"context_window_size": 1000000,
+                                          "used_percentage": 34}}, 60)
+    assert "Opus" in c and "high" in c and "1M" in c and "66% left" in c
     # the window is stated once: in the ctx segment, not also in the model name
     sl = _session_line({"model": {"display_name": "Opus 5 (1M context)"},
                         "context_window": {"context_window_size": 1000000,
-                                           "used_percentage": 34}})
+                                           "used_percentage": 34}}, 60)
     assert "of 1M" in sl and "(1M context)" not in sl
     # a model that takes no effort, and a session before its first API call
-    assert "Opus" in _session_line({"model": {"display_name": "Opus"}})
-    assert _session_line({}) is None
-    wide = ["x" * 30] * 4
-    assert len(_grid(wide, 80)) == 2 and len(_grid(wide, 200)) == 1
-    # three cells across a two-column width must split 2+1, never 3 then a lone orphan
-    assert [len(r.split()) for r in _grid(["a"] * 3, 5)] == [2, 1]
-    assert "+" in _grid(["y" * 30] * 20, 80, max_rows=3)[-1]
-    assert all(_wide(r) <= 80 for r in _grid(["z" * 24] * 7, 80)), "a row must never overrun"
+    assert "Opus" in _session_line({"model": {"display_name": "Opus"}}, 60)
+    assert _session_line({}, 60) is None
+    assert _mins("5h") < _mins("7d") < _mins("zz"), "columns run shortest window first"
+    mk = lambda n, w: (" ", n, w, False)
+    body, _ = _table([mk("a", {"5h": 10, "7d": 20}), mk("b", {"7d": 30})], 80)
+    # a missing window leaves its column empty rather than shifting the next one into it
+    plain = [re.sub(r"\x1b\[[0-9;]*m", "", b) for b in body]
+    assert plain[1].index("30%") == plain[0].index("20%")
+    assert "+2 more accounts" in _table([mk(str(i), {"7d": i}) for i in range(6)], 80, 4)[0][-1]
     print("ok")
 
 

@@ -24,10 +24,20 @@ With the status line installed, every account stays visible while you work — t
 you're in with both its windows, the rest with their hottest one:
 
 ```
-Opus 5   high   ctx ━━━────── 68% of 1M
-claude-main 5h ━━───  34%  7d ━━━━━  88%   claude-alt  5h ━────  12%  7d ━━───  31%
-codex-main  5h ━━━━━  97%  7d ━━───  40%
+Opus 5  high  ctx ▰▰▰▰▰▰▰▱▱▱ 68% left of 1M
+▸ claude-main  ▰▰▰▱▱▱▱▱  34% ▰▰▰▰▰▰▰▱  88%
+  claude-alt   ▰▱▱▱▱▱▱▱  12% ▰▰▱▱▱▱▱▱  31%
+! codex-main   ▰▰▰▰▰▰▰▰  97% ▰▰▰▱▱▱▱▱  40%
 ```
+
+One account per row, one column per window, shortest first — so the column a meter
+sits in says which window it is, and the labels that used to repeat against every
+account are gone. An account with no short window leaves that column empty rather than
+sliding into it. `▸` is where you are, `!` is an account that would bill you.
+
+The first line is the session itself — model, reasoning effort, and context left. Every
+bar fills in the direction of its number: account meters fill as quota is spent, the
+context meter drains as context is used.
 
 The first line is the session itself — model, reasoning effort, and context headroom —
 so a model swap or a mid-session `/effort` change shows up immediately. Accounts sit
