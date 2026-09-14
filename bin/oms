@@ -1509,6 +1509,7 @@ def selftest():
     noted, _ = _table([mk("a", {"7d": 5}), mk("b", "no usage")], 80)
     assert "no usage" in noted[1] and noted[1].startswith("b")
     _guard_holds()
+    _choices_hold()
     print("ok")
 
 
@@ -1548,6 +1549,50 @@ def _pace_reads_the_trail():
                {"at": now, "pct": 70, "resets": reset}])
         assert pace(acct, fast)["hits_at"] - now > WARN_WITHIN, "1%/h from 70% is not"
     USAGE = real
+
+
+def _choices_hold():
+    """How run and auto behave as readings age. Both reversed silently once already.
+
+    The rule they encode: an old reading is not evidence, so it must not be *chosen* on
+    while anything better exists - but it is also not a fault, so it must never stop a
+    launch. Those two pull in opposite directions, which is how 0.30.0 managed to get
+    both wrong at once.
+    """
+    global usage, usage_all
+    real_usage, real_all, launched, notes = usage, usage_all, [], []
+    fresh = {"name": "fresh", "vendor": "codex", "dir": "/tmp"}
+    old = {"name": "old", "vendor": "codex", "dir": "/tmp", "paid_overflow": True}
+    readings = {"fresh": reading([("5h", 50)], age=60),
+                "old": reading([("5h", 10)], age=3 * 86400, paid_on=True)}
+    usage = lambda a: readings[a["name"]]
+    usage_all = lambda accounts: [readings[a["name"]] for a in accounts]
+    real_exec, os.execvpe = os.execvpe, lambda f, a, e: launched.append(a[0])
+    quiet, sys.stderr = sys.stderr, type("W", (), {"write": notes.append, "flush": lambda s: None})()
+    try:
+        cmd_run({"accounts": [old], "block_at": 95}, ["old"])
+        assert launched, "an aged reading must not stop a launch"
+        assert any("old information" in n for n in notes), "but it must be said out loud"
+
+        # the stale one is emptier; freshness has to beat a better-looking old number
+        launched.clear()
+        cmd_auto({"accounts": [old, fresh], "block_at": 95}, ["codex"])
+        assert launched == ["codex"], launched
+        assert any("fresh" in n for n in notes), f"auto chose on a stale reading: {notes}"
+
+        # nothing fresh anywhere: pick regardless rather than refuse
+        launched.clear(), notes.clear()
+        try:
+            cmd_auto({"accounts": [old], "block_at": 95}, ["codex"])
+        except SystemExit:
+            # die() writes into the captured stderr, so without this the failure would
+            # be an exit code and no explanation
+            raise AssertionError(
+                "auto refused when every reading was old: " + "".join(notes).strip())
+        assert launched, "auto refused when every reading was old"
+        assert any("last read" in n for n in notes), "and did not say the reading was old"
+    finally:
+        usage, usage_all, os.execvpe, sys.stderr = real_usage, real_all, real_exec, quiet
 
 
 def _guard_holds():
