@@ -10,6 +10,13 @@ own CLI wrote on your disk. It never calls a vendor API and never handles a toke
 import json, os, re, subprocess, sys, time
 from pathlib import Path
 
+# This program narrates work it then hands to a subprocess, or to die(). Those write
+# straight through while our own prints sit in a block buffer, so the explanation
+# arrives after the thing it explains. Three separate fixes for that were three prints
+# remembering to flush; this is the whole class.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(line_buffering=True)
+
 OMS = Path(os.environ.get("OMS_HOME", Path.home() / ".oms"))
 CFG, USAGE = OMS / "config.json", OMS / "usage"
 DEFAULT_CLAUDE_DIR = Path.home() / ".claude"
@@ -431,7 +438,7 @@ def ensure_installed(vendor, allow_install=True):
     shown = " ".join(cmd[2:]) if cmd[0] == "bash" else " ".join(cmd)
     if not allow_install:
         die(f"{p['bin']} is not installed. install it with:\n  {shown}")
-    print(f"installing {p['bin']}\n$ {shown}", flush=True)
+    print(f"installing {p['bin']}\n$ {shown}")
     if subprocess.run(cmd).returncode != 0:
         die(f"install failed. try it by hand:\n  {shown}")
     if not installed(vendor):
@@ -1234,8 +1241,7 @@ def cmd_login(cfg, args):
                 (tmp / sh).symlink_to(src)
     cmd = [p["bin"], *(p["login"] or p["launch"])]
     if p["login"] is None:
-        print(f"launching {p['bin']} - run /login inside it, then exit with Ctrl-D",
-              flush=True)
+        print(f"launching {p['bin']} - run /login inside it, then exit with Ctrl-D")
     if subprocess.run(cmd, env=e).returncode != 0:
         die(f"login failed; nothing registered. profile left at {tmp}")
     if existing:
@@ -1255,7 +1261,7 @@ def cmd_login(cfg, args):
         # No terminal to ask on, so don't pretend to: take the default and say so loudly.
         name = default
         print(f"\n  no terminal to prompt on, so this is registered as '{name}'."
-              f"\n  rename it with:  oms rename {name} <your-name>\n", flush=True)
+              f"\n  rename it with:  oms rename {name} <your-name>\n")
     if name in taken:
         die(f"'{name}' is already registered. pick another, profile is at {tmp}")
     dest = OMS / "accounts" / name
@@ -1317,7 +1323,7 @@ def prime(acct, run=True):
     cmd = provider(acct).get("prime")
     if not run or not cmd:
         return
-    print(f"priming {acct['name']} with one turn so it reports usage...", flush=True)
+    print(f"priming {acct['name']} with one turn so it reports usage...")
     b = provider(acct)["bin"]
     r = subprocess.run([b, *launch_flags(acct), *cmd], env=env_for(acct),
                        capture_output=True, text=True)
