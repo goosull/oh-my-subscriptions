@@ -505,8 +505,7 @@ def blocked(acct, u, block_at):
     """Could running this account bill you? -> reason or None."""
     if u.get("err"):
         return u["err"]
-    if stale(u) and u["paid_on"]:
-        return f"last read {_ago(u['age'])} ago, too old to vouch for on a billable plan"
+
     if not u["paid_on"]:
         return None  # plan-only: it stops at the ceiling instead of charging
     if u["pct"] >= acct.get("block_at", block_at):
@@ -887,6 +886,9 @@ def cmd_run(cfg, args, check=True):
     a = find(cfg, args[0])
     if check:
         u = usage(a)
+        if stale(u):
+            print(f"oms: {a['name']} was last read {_ago(u['age'])} ago, so the guard is "
+                  f"going on old information", file=sys.stderr)
         if u.get("err"):
             # unknown usage is not evidence of risk, and every fresh profile starts here
             print(f"oms: {a['name']} usage unknown ({u['err']})", file=sys.stderr)
@@ -976,13 +978,20 @@ def cmd_auto(cfg, args):
                 f"  oms auto <{'|'.join(have) or '|'.join(PROVIDERS)}> [args...]")
         vendor, rest = have[0], args
     mine = [a for a in cfg["accounts"] if a["vendor"] == vendor]
-    cands = [(sel_key(cfg, a, u), a, u) for a, u in zip(mine, usage_all(mine))
-             # a stale reading is not evidence; auto must not pick on it
-             if not u.get("err") and not stale(u) and not blocked(a, u, cfg["block_at"])]
+    usable = [(a, u) for a, u in zip(mine, usage_all(mine))
+              if not u.get("err") and not blocked(a, u, cfg["block_at"])]
+    # a fresh reading is evidence and a stale one is not, so prefer any fresh account -
+    # but refusing to launch at all because nothing was measured recently is the worse
+    # failure, and for a claude account, being unread is simply what between sessions
+    # looks like
+    fresh = [(sel_key(cfg, a, u), a, u) for a, u in usable if not stale(u)]
+    cands = fresh or [(sel_key(cfg, a, u), a, u) for a, u in usable]
     if not cands:
         die(f"no {vendor} account is both known-good and unblocked. run 'oms status'")
     _, best, bu = min(cands, key=lambda t: t[0])
     why = bu.get("detail") or f"{bu['pct']:.0f}% used"
+    if stale(bu):
+        why += f", last read {_ago(bu['age'])} ago"
     if dry:
         print(f"{best['name']}  {why}\n$ {' '.join([provider(best)['bin'], *launch_flags(best), *rest])}")
         return
@@ -1395,7 +1404,8 @@ def selftest():
     fresh = reading([("5h", 30)], paid_on=True, age=60)
     old = reading([("5h", 30)], paid_on=True, age=3 * 86400)
     assert not stale(fresh) and stale(old)
-    assert not blocked(a, fresh, 95) and blocked(a, old, 95), "a guard cannot vouch for history"
+    # staleness must not be laundered into a refusal: it stops auto choosing, not you running
+    assert not blocked(a, old, 95), "an old reading is not itself a reason to refuse a launch"
     assert not stale(reading([("30d", 30)], age=3 * 86400)), "three days is young for a month"
     assert _win(10080) == "7d" and _win(300) == "5h" and _win(None) == "?"
     assert _until(time.time() + 7260).startswith("2h") and _until(0) == "-"

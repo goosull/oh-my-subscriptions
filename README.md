@@ -29,10 +29,12 @@ line through — a projection from one sample is a guess with a decimal point on
 
 `AS OF` says how old the reading is, and `stale` next to it means old enough that the
 window could have moved underneath — a quarter of the window it describes, so 75 minutes
-for a 5-hour one and a day and a half for a weekly one. A stale reading is not treated
-as a small number; it is treated as no number. `oms auto` will not pick on one, and the
-guard refuses a billable account rather than vouch for history. This is the state a
-Claude account drifts into once you stop opening Claude Code, since that is the only
+for a 5-hour one and a day and a half for a weekly one. A stale reading is not treated as a
+small number; it is treated as no number. `oms auto` passes over one while any account
+has a fresh reading, and says so when every reading is old and it picks anyway. `oms run`
+still launches, with a line saying the guard is going on old information — refusing to
+start something because nothing was measured recently is the worse failure. A Claude
+account is stale between sessions as a matter of course, since Claude Code is the only
 place its figure comes from.
 
 `BILLS?` is what happens when a plan reaches its ceiling: `no` means it stops and costs
