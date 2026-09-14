@@ -108,8 +108,19 @@ line you already had. Restart Claude Code and the numbers start filling in.
 | codex | `CODEX_HOME=<dir>` | `rate_limits` in the session rollout files codex writes under that dir |
 | kiro | `KIRO_HOME=<dir>` | — Kiro exposes no usage command and writes no local quota record |
 
-A provider you have not installed is still a provider: `oms add` registers the account
-and tells you how to install the CLI, and it starts working once that CLI is there.
+A provider you have not installed is still a provider. `oms login kiro` offers to
+install the CLI first and then logs you in:
+
+```
+$ oms login kiro
+kiro-cli is not installed. oms can run:
+  brew install --cask kiro-cli
+run it? [Y/n]
+```
+
+It picks the first install route whose own tool is on your machine (Homebrew before
+the curl script, for instance) and never installs silently — with no terminal to ask
+on it prints the command instead, and `--yes` skips the prompt for scripts.
 Where a provider reports no usage, `oms status` says so rather than showing it as an
 empty account, and `oms auto` leaves it out of automatic selection because there is
 nothing to choose on.
