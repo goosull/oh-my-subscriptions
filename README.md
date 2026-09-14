@@ -112,20 +112,22 @@ A provider you have not installed is still a provider. `oms login kiro` offers t
 install the CLI first and then logs you in:
 
 ```
-$ oms login kiro kiro-student
-kiro-cli is not installed. oms can run:
-  brew install --cask kiro-cli
-run it? [Y/n]
+$ oms login kiro kiro-1
+installing kiro-cli
+$ brew install --cask kiro-cli
 ```
+
+It picks the first install route whose own tool is on your machine — Homebrew before
+the curl script, for instance — and echoes the command before running it. You named the
+provider, so installing its CLI is the prerequisite of what you asked for rather than a
+surprise; `--no-install` refuses instead.
 
 Naming the account up front logs straight into it, adopting one you already registered.
 Leave the name off and oms asks once the login succeeds, so a failed login never leaves
 a named half-account behind. `oms remove <name>` unregisters one, and `--purge` also
 deletes the profile directory, but only ever one oms created itself.
 
-It picks the first install route whose own tool is on your machine (Homebrew before
-the curl script, for instance) and never installs silently — with no terminal to ask
-on it prints the command instead, and `--yes` skips the prompt for scripts.
+
 Where a provider reports no usage, `oms status` says so rather than showing it as an
 empty account, and `oms auto` leaves it out of automatic selection because there is
 nothing to choose on.
@@ -158,11 +160,11 @@ weekly-only accounts in reserve, preferring the most headroom within each group.
 $ oms priority
 priority: automatic - short windows first, then most headroom
 
-  codex 1. codex-a         5h at 0%, expires on reset
-  codex 2. codex-b         weekly pool, 51% used
+  codex 1. codex-main         5h at 0%, expires on reset
+  codex 2. codex-alt         weekly pool, 51% used
 ```
 
-Override it with an explicit order, `oms priority codex-b codex-a`, and go back with
+Override it with an explicit order, `oms priority codex-alt codex-a`, and go back with
 `oms priority --auto`. Accounts you leave out still get used, just after every listed
 one. Priority is only about order — an account that could bill you is skipped by the
 guard below no matter where it sits.
@@ -244,12 +246,13 @@ not this tool.
 ## Commands
 
 ```
-oms login <claude|codex>             log in to a new account, then name it
-oms add <name> <claude|codex> [--dir PATH] [--paid-overflow yes|no]
+oms login <provider> [<name>]        install if missing, log in, name it
+oms add <name> <provider> [--dir PATH] [--paid-overflow yes|no]
+oms remove <name> [--purge]          unregister an account
 oms install                          wire usage recording into ~/.claude/settings.json
 oms status                           what every account has left
 oms run [--force] <name> [args...]   launch one account
-oms auto <claude|codex> [args...]    launch the freest account that can't bill you
+oms auto <provider> [args...]        launch the freest account that can't bill you
 oms rename <old> <new>               rename an account, keeping its usage history
 oms env <name>                       print the export line for a shell
 ```

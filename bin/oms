@@ -192,11 +192,12 @@ def _install_cmd(vendor):
     return None
 
 
-def ensure_installed(vendor, assume_yes=False):
-    """Offer to install a provider's CLI. Returns True once it is there.
+def ensure_installed(vendor, allow_install=True):
+    """Install a provider's CLI if it is missing. Returns True once it is there.
 
-    Never installs silently: this puts software on the machine, so it asks first
-    unless told not to, and with no terminal to ask on it prints the command instead.
+    No confirmation: you named the provider, and installing its CLI is the prerequisite
+    of what you asked for, not a surprise. The command is echoed before it runs, and
+    --no-install refuses instead.
     """
     if installed(vendor):
         return True
@@ -206,14 +207,9 @@ def ensure_installed(vendor, assume_yes=False):
         die(f"{p['bin']} is not installed, and no install route is available here.\n"
             f"  tried: {', '.join(n for n, _ in p['install'])}")
     shown = " ".join(cmd[2:]) if cmd[0] == "bash" else " ".join(cmd)
-    if not assume_yes:
-        if not sys.stdin.isatty():
-            die(f"{p['bin']} is not installed. install it with:\n  {shown}\n"
-                f"  or re-run with --yes to have oms do it")
-        print(f"{p['bin']} is not installed. oms can run:\n  {shown}")
-        if input("run it? [Y/n] ").strip().lower() in ("n", "no"):
-            die("not installed; nothing registered")
-    print(f"$ {shown}")
+    if not allow_install:
+        die(f"{p['bin']} is not installed. install it with:\n  {shown}")
+    print(f"installing {p['bin']}\n$ {shown}")
     if subprocess.run(cmd).returncode != 0:
         die(f"install failed. try it by hand:\n  {shown}")
     if not installed(vendor):
@@ -812,10 +808,10 @@ def cmd_install(cfg, args):
 
 def cmd_login(cfg, args):
     """Log in to a new account first, name it after. `oms login codex`"""
-    assume_yes = "--yes" in args
-    args = [a for a in args if a != "--yes"]
+    allow = "--no-install" not in args
+    args = [a for a in args if a != "--no-install"]
     if not args or args[0] not in PROVIDERS:
-        die(f"usage: oms login <{'|'.join(PROVIDERS)}> [<name>] [--yes]")
+        die(f"usage: oms login <{'|'.join(PROVIDERS)}> [<name>] [--no-install]")
     vendor = args[0]
     want = args[1] if len(args) > 1 else None
     existing = next((a for a in cfg["accounts"] if a["name"] == want), None)
@@ -829,7 +825,7 @@ def cmd_login(cfg, args):
         e.pop(k, None)
     e[PROVIDERS[vendor]["home"]] = str(tmp)
     p = PROVIDERS[vendor]
-    ensure_installed(vendor, assume_yes)
+    ensure_installed(vendor, allow)
     if vendor == "claude":
         for sh in SHARED:  # so the login session looks like your normal setup
             src = DEFAULT_CLAUDE_DIR / sh
@@ -999,7 +995,7 @@ CMDS = {"status": cmd_status, "add": cmd_add, "run": cmd_run, "auto": cmd_auto,
         "handoff": cmd_handoff, "check": cmd_check,
         "statusline": cmd_statusline, "install": cmd_install, "env": cmd_env}
 USAGE_TEXT = __doc__ + """
-  oms login <provider> [<name>] [--yes]  install if needed, log in, name it
+  oms login <provider> [<name>]        install if missing, log in, name it
   oms remove <name> [--purge]          unregister an account
   oms add <name> <provider> [--dir PATH] [--paid-overflow yes|no]
   oms install                          wire usage recording into ~/.claude/settings.json
