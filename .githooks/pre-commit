@@ -7,6 +7,7 @@ set -e
 root=$(git rev-parse --show-toplevel)
 "$root/bin/oms" --selftest >/dev/null
 python3 "$root/.github/check-docs.py" >/dev/null
+python3 "$root/.github/check-wired.py" >/dev/null
 if [ -d "$root/agent/node_modules" ]; then
 	(cd "$root/agent" && bun test >/dev/null 2>&1) || {
 		echo "pre-commit: agent tests failed — run 'cd agent && bun test'" >&2

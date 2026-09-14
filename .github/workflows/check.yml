@@ -15,6 +15,7 @@ jobs:
       # oms is one stdlib-only file, so there is nothing to install
       - run: ./bin/oms --selftest
       - run: python3 .github/check-docs.py
+      - run: python3 .github/check-wired.py
       - name: a fresh machine can add an account and be told what is missing
         run: |
           export OMS_HOME="$RUNNER_TEMP/oms"

@@ -149,6 +149,7 @@ to another account.
 git config core.hooksPath .githooks   # once: refuses a commit the checks would fail
 ./bin/oms --selftest                  # the tool, including that the guard stops a launch
 python3 .github/check-docs.py         # that nothing documents a command the CLI lacks
+python3 .github/check-wired.py        # that nothing was built and left unconnected
 cd agent && bun test                  # the loop
 ```
 
