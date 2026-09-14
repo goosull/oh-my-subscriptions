@@ -9,6 +9,10 @@ root=$(git rev-parse --show-toplevel)
 python3 "$root/.github/check-docs.py" >/dev/null
 python3 "$root/.github/check-wired.py" >/dev/null
 if [ -d "$root/agent/node_modules" ]; then
+	(cd "$root/agent" && bun run typecheck >/dev/null 2>&1) || {
+		echo "pre-commit: agent does not typecheck — run 'cd agent && bun run typecheck'" >&2
+		exit 1
+	}
 	(cd "$root/agent" && bun test >/dev/null 2>&1) || {
 		echo "pre-commit: agent tests failed — run 'cd agent && bun test'" >&2
 		exit 1

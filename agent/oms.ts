@@ -34,8 +34,3 @@ export function accounts(vendor?: string): Account[] {
   const all: Account[] = JSON.parse(r.stdout.toString()).accounts;
   return all.filter(a => (!vendor || a.vendor === vendor) && a.installed);
 }
-
-/** The account to spend next, or undefined when every one of them would cost money. */
-export function pick(vendor?: string): Account | undefined {
-  return accounts(vendor).find(a => a.available);
-}

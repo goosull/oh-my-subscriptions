@@ -6,7 +6,7 @@
 // part worth getting right, and it can be exercised long before a model is attached.
 import { createMockModel } from "@oh-my-pi/pi-ai";
 import { accounts, type Account } from "./oms";
-import { run } from "./src/loop";
+import { run, type Loop } from "./src/loop";
 import type { Ask, Engine, Entry, Tool } from "./src/types";
 import { sender } from "./src/wire";
 
@@ -79,7 +79,7 @@ if (!spendable.length) {
   process.exit(0);
 }
 
-const loop = {
+const loop: Loop = {
   system: ["Be terse."],
   tools: [shell],
   route,
@@ -91,7 +91,7 @@ const transcript: Entry[] = [];
 // wire, moving costs more than the better model is worth.
 if (Bun.env.HEAVY) transcript.push({ from: "tool", callId: "seed", tool: "read", result: "x".repeat(6000) });
 
-for await (const ev of run(loop as any, transcript, "what kernel is this?")) {
+for await (const ev of run(loop, transcript, "what kernel is this?")) {
   if (ev.at === "routed") {
     const a = spendable.find(x => x.name === ev.engine.account);
     const note = a ? `${a.used_percent?.toFixed(0)}% used, ${a.pays_on_overflow ? "can bill" : "cannot bill"}` : "no account";

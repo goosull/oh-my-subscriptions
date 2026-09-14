@@ -5,9 +5,14 @@
   "scripts": {
     "demo": "bun run demo.ts",
     "cost": "bun run cost.ts",
-    "test": "bun test"
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@oh-my-pi/pi-ai": "^18.1.21"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.4.2",
+    "typescript": "^7.0.2"
   }
 }
