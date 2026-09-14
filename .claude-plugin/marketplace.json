@@ -1,0 +1,14 @@
+{
+  "name": "oh-my-subscriptions",
+  "owner": {
+    "name": "goosull"
+  },
+  "plugins": [
+    {
+      "name": "oh-my-subscriptions",
+      "source": "./",
+      "description": "See what every Claude and Codex subscription you own has left, and never let one spill into paid credit."
+    }
+  ],
+  "description": "Tools for keeping track of the AI coding subscriptions you already pay for."
+}

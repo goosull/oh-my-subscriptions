@@ -1,0 +1,308 @@
+#!/usr/bin/env python3
+"""oms - one terminal, many AI subscriptions.
+
+Keeps each Claude / Codex account in its own profile directory, shows what each
+plan window has left, and refuses to launch an account that could bill you.
+
+Everything it reads is either a documented extension point or a file the vendor's
+own CLI wrote on your disk. It never calls a vendor API and never handles a token.
+"""
+import json, os, subprocess, sys, time
+from pathlib import Path
+
+OMS = Path(os.environ.get("OMS_HOME", Path.home() / ".oms"))
+CFG, USAGE = OMS / "config.json", OMS / "usage"
+DEFAULT_CLAUDE_DIR = Path.home() / ".claude"
+# Shared from ~/.claude into alt claude profiles so a second account is not a bare install.
+SHARED = ["skills", "plugins", "agents", "commands", "settings.json", "CLAUDE.md", "output-styles"]
+
+
+def die(msg):
+    print(f"oms: {msg}", file=sys.stderr)
+    sys.exit(1)
+
+
+def load():
+    return json.loads(CFG.read_text()) if CFG.exists() else {"accounts": [], "block_at": 95}
+
+
+def save(cfg):
+    OMS.mkdir(parents=True, exist_ok=True)
+    CFG.write_text(json.dumps(cfg, indent=2))
+
+
+def find(cfg, name):
+    for a in cfg["accounts"]:
+        if a["name"] == name:
+            return a
+    die(f"no such account: {name} (have: {', '.join(a['name'] for a in cfg['accounts']) or 'none'})")
+
+
+# --- usage: claude ------------------------------------------------------------
+# Claude Code hands `rate_limits` to the statusLine command on stdin (documented).
+# `oms statusline` records it per account; this reads back what it recorded.
+
+def claude_usage(acct):
+    f = USAGE / f"{acct['name']}.json"
+    if not f.exists():
+        return {"err": "no data yet - run this account once"}
+    d = json.loads(f.read_text())
+    rl = d.get("rate_limits") or {}
+    fh, sd = rl.get("five_hour") or {}, rl.get("seven_day") or {}
+    if not fh and not sd:
+        return {"err": "no rate_limits in last session"}
+    pct = max(fh.get("used_percentage") or 0, sd.get("used_percentage") or 0)
+    hot = fh if (fh.get("used_percentage") or 0) >= (sd.get("used_percentage") or 0) else sd
+    return {"plan": "-", "pct": pct, "resets": hot.get("resets_at"),
+            "age": time.time() - d.get("at", 0),
+            "paid_on": bool(acct.get("paid_overflow", True)),
+            "detail": f"5h {fh.get('used_percentage', 0):.0f}% / 7d {sd.get('used_percentage', 0):.0f}%"}
+
+
+# --- usage: codex -------------------------------------------------------------
+# The codex CLI writes rate_limits into its own session rollout files. Read the
+# newest one in this profile; no network, no token.
+
+def codex_usage(acct):
+    sess = Path(acct["dir"]) / "sessions"
+    if not sess.is_dir():
+        return {"err": "no data yet - run this account once"}
+    files = sorted(sess.rglob("*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True)
+    for f in files[:10]:
+        line = None
+        for l in f.open(errors="ignore"):
+            if '"rate_limits"' in l:
+                line = l
+        if not line:
+            continue
+        rl = json.loads(line)["payload"]["rate_limits"]
+        pw, sw = rl.get("primary") or {}, rl.get("secondary") or {}
+        cr = rl.get("credits") or {}
+        pct = max(pw.get("used_percent") or 0, sw.get("used_percent") or 0)
+        hot = pw if (pw.get("used_percent") or 0) >= (sw.get("used_percent") or 0) else sw
+        return {"plan": rl.get("plan_type", "?"), "pct": pct, "resets": hot.get("resets_at"),
+                "age": time.time() - f.stat().st_mtime,
+                "paid_on": bool(cr.get("has_credits")) or float(cr.get("balance") or 0) > 0,
+                "detail": _cdetail(pw, sw)}
+    return {"err": "no rate_limits recorded yet"}
+
+
+def _cdetail(pw, sw):
+    s = f"{_win(pw.get('window_minutes'))} {pw.get('used_percent', 0):.0f}%"
+    if sw:
+        s += f" / {_win(sw.get('window_minutes'))} {sw.get('used_percent', 0):.0f}%"
+    return s
+
+
+def _win(mins):
+    if not mins:
+        return "?"
+    h = mins // 60
+    return f"{h}h" if h < 48 else f"{h // 24}d"
+
+
+def usage(acct):
+    return (claude_usage if acct["vendor"] == "claude" else codex_usage)(acct)
+
+
+def _until(ts):
+    if not ts:
+        return "-"
+    s = int(float(ts) - time.time())
+    if s <= 0:
+        return "now"
+    return f"{s // 86400}d {s % 86400 // 3600}h" if s >= 86400 else f"{s // 3600}h {s % 3600 // 60}m"
+
+
+def _ago(sec):
+    if sec is None:
+        return "?"
+    return f"{int(sec // 86400)}d" if sec >= 86400 else (f"{int(sec // 3600)}h" if sec >= 3600 else f"{int(sec // 60)}m")
+
+
+# --- policy -------------------------------------------------------------------
+
+def blocked(acct, u, block_at):
+    """Could running this account bill you? -> reason or None."""
+    if u.get("err"):
+        return u["err"]
+    if not u["paid_on"]:
+        return None  # plan-only: it stops at the ceiling instead of charging
+    if u["pct"] >= acct.get("block_at", block_at):
+        return f"{u['pct']:.0f}% used and paid overflow is on for this account"
+    return None
+
+
+# --- commands -----------------------------------------------------------------
+
+def cmd_status(cfg, args):
+    if not cfg["accounts"]:
+        die("no accounts yet. try: oms add work claude --dir ~/.claude")
+    w = max(max(len(a["name"]) for a in cfg["accounts"]), 7)
+    print(f"{'ACCOUNT':<{w}}  {'VENDOR':<6} {'PLAN':<6} {'USED':<22} {'RESETS':<9} {'AS OF':<6} PAID")
+    for a in cfg["accounts"]:
+        u = usage(a)
+        if u.get("err"):
+            print(f"{a['name']:<{w}}  {a['vendor']:<6} {'-':<6} {('! ' + u['err'])[:22]:<22} {'-':<9} {'-':<6} -")
+            continue
+        b = blocked(a, u, cfg["block_at"])
+        print(f"{a['name']:<{w}}  {a['vendor']:<6} {u['plan'][:6]:<6} {u['detail']:<22} "
+              f"{_until(u['resets']):<9} {_ago(u.get('age')):<6} "
+              f"{'ON' if u['paid_on'] else 'OFF'}{'  <- BLOCKED' if b else ''}")
+    print("\n'AS OF' is how stale the number is: it updates when you actually use that account.")
+
+
+def cmd_add(cfg, args):
+    if len(args) < 2 or args[1] not in ("claude", "codex"):
+        die("usage: oms add <name> <claude|codex> [--dir PATH] [--paid-overflow yes|no]")
+    name, vendor = args[0], args[1]
+    d = os.path.expanduser(args[args.index("--dir") + 1]) if "--dir" in args else str(OMS / "accounts" / name)
+    Path(d).mkdir(parents=True, exist_ok=True)
+    if vendor == "claude" and Path(d) != DEFAULT_CLAUDE_DIR:
+        for s in SHARED:
+            src, dst = DEFAULT_CLAUDE_DIR / s, Path(d) / s
+            if src.exists() and not dst.exists():
+                dst.symlink_to(src)
+    acct = {"name": name, "vendor": vendor, "dir": d}
+    if vendor == "claude":
+        # codex reports its own credit balance; claude's overage flag is org-side, so ask.
+        v = args[args.index("--paid-overflow") + 1] if "--paid-overflow" in args else "yes"
+        acct["paid_overflow"] = v.lower() in ("yes", "true", "1")
+    cfg["accounts"] = [a for a in cfg["accounts"] if a["name"] != name] + [acct]
+    save(cfg)
+    print(f"added {name} -> {d}")
+    print(f"log in with:  oms run {name}" + ("   (then /login inside)" if vendor == "claude" else ""))
+
+
+def env_for(acct):
+    e = dict(os.environ)
+    for k in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"):
+        e.pop(k, None)  # an API key would turn plan usage into metered usage
+    e["CLAUDE_CONFIG_DIR" if acct["vendor"] == "claude" else "CODEX_HOME"] = acct["dir"]
+    e["OMS_ACCOUNT"] = acct["name"]
+    return e
+
+
+def cmd_run(cfg, args, check=True):
+    if not args:
+        die("usage: oms run [--force] <account> [cli args...]")
+    a = find(cfg, args[0])
+    if check:
+        b = blocked(a, usage(a), cfg["block_at"])
+        if b and not b.startswith("no data"):
+            die(f"{a['name']} blocked: {b}\n     'oms run --force {a['name']}' to override, "
+                f"or 'oms auto {a['vendor']}' to pick another")
+    os.execvpe(a["vendor"], [a["vendor"], *args[1:]], env_for(a))
+
+
+def cmd_auto(cfg, args):
+    vendor = args[0] if args and args[0] in ("claude", "codex") else "claude"
+    rest = args[1:] if args and args[0] in ("claude", "codex") else args
+    best, bp = None, None
+    for a in cfg["accounts"]:
+        if a["vendor"] != vendor:
+            continue
+        u = usage(a)
+        if u.get("err"):
+            continue
+        if blocked(a, u, cfg["block_at"]):
+            continue
+        if best is None or u["pct"] < bp:
+            best, bp = a, u["pct"]
+    if not best:
+        die(f"no {vendor} account is both known-good and unblocked. run 'oms status'")
+    print(f"oms: {best['name']} ({bp:.0f}% used)", file=sys.stderr)
+    os.execvpe(vendor, [vendor, *rest], env_for(best))
+
+
+def cmd_statusline(cfg, args):
+    """Claude Code statusLine command: record this account's rate_limits, print a line.
+
+    Any extra args are run as your previous status line and its output is passed through.
+    """
+    raw = sys.stdin.read()
+    try:
+        d = json.loads(raw)
+    except ValueError:
+        d = {}
+    name = os.environ.get("OMS_ACCOUNT")
+    if not name:  # not launched through oms: match the running config dir to an account
+        cur = Path(os.environ.get("CLAUDE_CONFIG_DIR") or DEFAULT_CLAUDE_DIR)
+        for a in cfg["accounts"]:
+            if a["vendor"] == "claude" and Path(a["dir"]) == cur:
+                name = a["name"]
+    if name and d.get("rate_limits"):
+        USAGE.mkdir(parents=True, exist_ok=True)
+        (USAGE / f"{name}.json").write_text(json.dumps(
+            {"at": time.time(), "rate_limits": d["rate_limits"]}))
+    if args:  # chain to whatever status line you had
+        p = subprocess.run(args, input=raw, capture_output=True, text=True)
+        sys.stdout.write(p.stdout)
+        return
+    rl = d.get("rate_limits") or {}
+    parts = [f"{name or 'claude'}"]
+    for k, lab in (("five_hour", "5h"), ("seven_day", "7d")):
+        if rl.get(k):
+            parts.append(f"{lab} {rl[k].get('used_percentage', 0):.0f}%")
+    print(" · ".join(parts))
+
+
+def cmd_install(cfg, args):
+    """Wire `oms statusline` into settings.json, chaining any existing status line."""
+    s = DEFAULT_CLAUDE_DIR / "settings.json"
+    d = json.loads(s.read_text()) if s.exists() else {}
+    prev = d.get("statusLine")
+    me = str(Path(__file__).resolve())
+    if isinstance(prev, dict) and "oms statusline" in str(prev.get("command", "")):
+        print("already installed")
+        return
+    cmd = f"{me} statusline"
+    if isinstance(prev, dict) and prev.get("command"):
+        cmd += " " + prev["command"]
+        print(f"chaining your existing status line: {prev['command']}")
+    d["statusLine"] = {"type": "command", "command": cmd}
+    s.write_text(json.dumps(d, indent=2))
+    print(f"installed into {s}\nrestart claude, then 'oms status' will see this account's usage.")
+
+
+def cmd_env(cfg, args):
+    a = find(cfg, args[0])
+    print(f'export {"CLAUDE_CONFIG_DIR" if a["vendor"] == "claude" else "CODEX_HOME"}="{a["dir"]}"')
+
+
+def selftest():
+    a = {"name": "x"}
+    assert blocked(a, {"pct": 99, "paid_on": False}, 95) is None, "plan-only can't bill, never block"
+    assert blocked(a, {"pct": 99, "paid_on": True}, 95), "must block possible overage"
+    assert blocked(a, {"pct": 50, "paid_on": True}, 95) is None
+    assert blocked({"name": "x", "block_at": 40}, {"pct": 50, "paid_on": True}, 95), "per-account limit"
+    assert blocked(a, {"err": "nope"}, 95) == "nope"
+    assert _win(10080) == "7d" and _win(300) == "5h" and _win(None) == "?"
+    assert _until(time.time() + 7260).startswith("2h") and _until(0) == "-"
+    assert _until(time.time() - 5) == "now"
+    print("ok")
+
+
+CMDS = {"status": cmd_status, "add": cmd_add, "run": cmd_run, "auto": cmd_auto,
+        "statusline": cmd_statusline, "install": cmd_install, "env": cmd_env}
+USAGE_TEXT = __doc__ + """
+  oms add <name> <claude|codex> [--dir PATH] [--paid-overflow yes|no]
+  oms install                          wire usage recording into ~/.claude/settings.json
+  oms status                           what every account has left
+  oms run [--force] <name> [args...]   launch one account
+  oms auto <claude|codex> [args...]    launch the freest account that can't bill you
+  oms env <name>                       print the export line for a shell
+"""
+
+if __name__ == "__main__":
+    argv = sys.argv[1:]
+    if argv and argv[0] == "--selftest":
+        selftest(); sys.exit(0)
+    if not argv or argv[0] not in CMDS:
+        print(USAGE_TEXT); sys.exit(0 if argv else 1)
+    force = "--force" in argv[1:]
+    rest = [x for x in argv[1:] if x != "--force"]
+    if argv[0] == "run":
+        cmd_run(load(), rest, check=not force)
+    else:
+        CMDS[argv[0]](load(), rest)
