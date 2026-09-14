@@ -223,6 +223,23 @@ and go back with `oms priority --auto`. Accounts you leave out still get used, j
 after every listed one. Priority is only about order — an account that could bill you is
 skipped by the guard below no matter where it sits.
 
+## When something stops working
+
+Most of this is wiring into other programs — a status line path in Claude Code's
+settings, a hook in a plugin, a CLI per provider — and each of those is built to fail
+quietly, because a status line must not throw and a hook must not stand between you and
+your prompt. Quiet failure needs somewhere loud to ask:
+
+```
+$ oms doctor
+  ok    oms                    /Users/you/.local/bin/oms
+  ok    on PATH                /Users/you/.local/bin/oms
+  FAIL  status line            /gone/oms is gone - run `oms install`
+  ok    codex-main             5h 27%  7d 12%  (142/5000 cr)
+```
+
+It exits non-zero when anything is unreachable, so it works in a script too.
+
 ## The paid-credit guard
 
 An account is blocked when **paid overflow is on for it AND usage is at or above

@@ -1244,6 +1244,52 @@ def cmd_remove(cfg, args):
             print("  not deleted: oms did not create that directory")
 
 
+def cmd_doctor(cfg, args):
+    """Check that the parts which fail silently are still connected.
+
+    Most of this tool is wiring into other programs - a status line path in someone
+    else's settings, a hook in a plugin, a CLI per provider - and every one of them
+    fails quietly by design, because a status line must not throw and a hook must not
+    stand in the way. Quiet failure needs somewhere loud to ask.
+    """
+    ok = True
+
+    def say(good, label, detail=""):
+        nonlocal ok
+        ok = ok and good
+        print(f"  {'ok  ' if good else 'FAIL'}  {label:<22} {detail}")
+
+    me = Path(__file__).resolve()
+    say(True, "oms", str(me))
+    from shutil import which
+    on_path = which("oms")
+    say(bool(on_path), "on PATH", on_path or "not on PATH - `oms` will not resolve in a subshell")
+
+    line = ((json.loads((DEFAULT_CLAUDE_DIR / "settings.json").read_text())
+             if (DEFAULT_CLAUDE_DIR / "settings.json").exists() else {}).get("statusLine") or {})
+    cmd = (line.get("command") or "").split()
+    if not cmd:
+        say(True, "status line", "not installed (only needed for a claude account)")
+    else:
+        there = Path(cmd[0]).exists()
+        say(there, "status line", cmd[0] if there else f"{cmd[0]} is gone - run `oms install`")
+
+    for a in cfg["accounts"]:
+        u = usage(a)
+        if not installed(a["vendor"]):
+            say(False, a["name"], f"{provider(a)['bin']} not installed - `oms login {a['vendor']}`")
+        elif u.get("err"):
+            say(False, a["name"], u["err"])
+        else:
+            b = blocked(a, u, cfg["block_at"])
+            say(True, a["name"], f"{u['detail']}{'  BLOCKED: ' + b if b else ''}")
+    if not cfg["accounts"]:
+        say(False, "accounts", f"none yet - `oms login <{'|'.join(PROVIDERS)}>`")
+
+    print("\neverything reachable" if ok else "\nsomething above needs fixing")
+    sys.exit(0 if ok else 1)
+
+
 def cmd_env(cfg, args):
     a = find(cfg, args[0])
     print(f'export {provider(a)["home"]}="{a["dir"]}"')
@@ -1424,7 +1470,7 @@ def _guard_holds():
 
 CMDS = {"status": cmd_status, "add": cmd_add, "run": cmd_run, "auto": cmd_auto,
         "login": cmd_login, "rename": cmd_rename, "priority": cmd_priority,
-        "config": cmd_config, "set": cmd_set, "remove": cmd_remove,
+        "config": cmd_config, "set": cmd_set, "remove": cmd_remove, "doctor": cmd_doctor,
         "handoff": cmd_handoff, "check": cmd_check,
         "statusline": cmd_statusline, "install": cmd_install, "env": cmd_env}
 USAGE_TEXT = __doc__ + """
@@ -1433,6 +1479,7 @@ USAGE_TEXT = __doc__ + """
   oms add <name> <provider> [--dir PATH] [--paid-overflow yes|no]
   oms install                          wire usage recording into ~/.claude/settings.json
   oms status [--json]                  what every account has left
+  oms doctor                           check the wiring that fails silently
   oms run [--force] <name> [args...]   launch one account
   oms auto <provider> [args...]        launch the best account that can't bill you
   oms auto <provider> --dry-run        say which one, and launch nothing

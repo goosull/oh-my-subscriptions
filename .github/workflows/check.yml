@@ -23,6 +23,8 @@ jobs:
           ./bin/oms status | grep -q probe
           ./bin/oms config | grep -q probe
           ./bin/oms remove probe --purge
+          # doctor must fail loudly on a machine with nothing set up
+          ! ./bin/oms doctor
 
   agent:
     runs-on: ubuntu-latest
