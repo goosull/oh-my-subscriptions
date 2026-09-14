@@ -298,27 +298,133 @@ def _best_alt(cfg, acct):
     return f"`oms run {b['name']} --handoff` has room ({v['pct']:.0f}% used)."
 
 
-def cmd_config(cfg, args):
-    """Per-account flags, handed to the vendor CLI on every launch.
+# One vocabulary, translated per vendor at launch. The point of oms is that you say
+# what you want once; remembering that codex spells effort `-c model_reasoning_effort`
+# and claude spells it `--effort` is exactly the work it should be absorbing.
+TRANSLATE = {
+    "model": {"claude": lambda v: ["--model", v],
+              "codex": lambda v: ["-m", v]},
+    "effort": {"claude": lambda v: ["--effort", v],
+               "codex": lambda v: ["-c", f'model_reasoning_effort="{v}"']},
+    # claude takes its window from the model, so there is nothing to set
+    "context": {"codex": lambda v: ["-c", f"model_context_window={v}"]},
+}
+EFFORTS = {"claude": ["low", "medium", "high", "xhigh", "max"],
+           "codex": ["minimal", "low", "medium", "high", "xhigh", "max"]}
 
-    No translation layer: these are that vendor's own flags, so anything it accepts
-    works - model, effort, context window, profile.
-    """
+
+def launch_flags(acct):
+    """Settings for this account, in its own vendor's spelling, then any raw args."""
+    out = []
+    for key, table in TRANSLATE.items():
+        v = acct.get(key)
+        if v is not None and acct["vendor"] in table:
+            out += table[acct["vendor"]](str(v))
+    return out + list(acct.get("args") or [])
+
+
+GLOBAL_KEYS = {
+    "block_at": "default %% at which an account that can bill you is blocked",
+    "warn_at": "%% at which the hook offers a handoff (default: block_at - 10)",
+    "priority": "comma-separated pick order, or 'auto'",
+}
+ACCOUNT_KEYS = {
+    "name": "what the account is called",
+    "model": "model to launch with, in that vendor's own model names",
+    "effort": "reasoning effort: low, medium, high, xhigh, max (codex also minimal)",
+    "context": "context window in tokens (codex only; claude takes it from the model)",
+    "args": "extra vendor flags, appended raw ('' to clear)",
+    "paid_overflow": "yes if hitting the ceiling on this account is billed",
+    "block_at": "override the global block threshold for this account",
+}
+
+
+def _coerce(key, val):
+    if key in ("block_at", "warn_at"):
+        if not val.lstrip("-").isdigit():
+            die(f"{key} takes a number, got {val!r}")
+        return int(val)
+    if key == "paid_overflow":
+        return val.lower() in ("yes", "true", "1", "on")
+    if key == "args":
+        return val.split() or None
+    if key == "context":
+        if not val.isdigit():
+            die(f"context takes a number of tokens, got {val!r}")
+        return int(val)
+    if key in ("model", "effort"):
+        return val or None
+    if key == "priority":
+        return None if val in ("auto", "") else [v.strip() for v in val.split(",") if v.strip()]
+    return val
+
+
+def cmd_config(cfg, args):
+    """Read every setting. `oms set` is the one place that writes them."""
+    if args:
+        die("`oms config` only shows settings. change them with:  oms set [<account>] key=value")
+    print("global")
+    for k in GLOBAL_KEYS:
+        v = cfg.get(k)
+        if k == "warn_at" and v is None:
+            v = f"{min(cfg['block_at'], 95) - 10} (derived)"
+        if k == "priority":
+            v = ", ".join(v) if v else "auto"
+        print(f"  {k:<15} {v if v is not None else '-'}")
+    for a in cfg["accounts"]:
+        print(f"\n{a['name']}  ({a['vendor']})")
+        for k in ACCOUNT_KEYS:
+            if k == "name":
+                continue
+            v = a.get(k)
+            if k == "args":
+                v = " ".join(v) if v else None
+            elif k == "paid_overflow" and v is not None:
+                v = "yes" if v else "no"
+            print(f"  {k:<15} {v if v is not None else '-'}")
+        flags = launch_flags(a)
+        print(f"  {'-> launches':<15} {a['vendor']} {' '.join(flags) if flags else '(defaults)'}")
+    print("\n  oms set all effort=high      oms set <account> model=...      oms set block_at=90")
+
+
+def cmd_set(cfg, args):
+    """The single writer: every setting, global or per account, as key=value."""
     if not args:
-        for a in cfg["accounts"]:
-            got = " ".join(a.get("args") or []) or "-"
-            print(f"  {a['name']:<14} {a['vendor']:<7} {got}")
-        print("\n  oms config <name> <flags...>   set        (e.g. oms config x --model opus)")
-        print("  oms config <name> --clear     clear")
-        return
-    a = find(cfg, args[0])
-    rest = args[1:]
-    if rest == ["--clear"]:
-        a.pop("args", None)
-    elif rest:
-        a["args"] = rest
+        die("usage: oms set [<account>] key=value ...\n"
+            "  global:  " + "  ".join(GLOBAL_KEYS) + "\n"
+            "  account: " + "  ".join(ACCOUNT_KEYS))
+    targets = None
+    if "=" not in args[0]:
+        targets = list(cfg["accounts"]) if args[0] == "all" else [find(cfg, args[0])]
+        args = args[1:]
+    keys = ACCOUNT_KEYS if targets else GLOBAL_KEYS
+    for pair in args:
+        if "=" not in pair:
+            die(f"expected key=value, got {pair!r}")
+        k, v = pair.split("=", 1)
+        if k not in keys:
+            die(f"unknown {'account' if targets else 'global'} key {k!r}."
+                f" valid: {', '.join(keys)}")
+        val = _coerce(k, v)
+        if not targets:
+            cfg.pop(k, None) if val is None else cfg.update({k: val})
+            continue
+        for a in targets:
+            if k in TRANSLATE and a["vendor"] not in TRANSLATE[k]:
+                # say so rather than storing a setting that will never be applied
+                print(f"  skipped {a['name']}: {a['vendor']} has no {k} setting",
+                      file=sys.stderr)
+                continue
+            if k == "effort" and val and val not in EFFORTS[a["vendor"]]:
+                die(f"{a['vendor']} takes effort {', '.join(EFFORTS[a['vendor']])}; got {val!r}")
+            if k == "name":
+                cmd_rename(cfg, [a["name"], val])  # moves usage and profile with it
+            elif val is None:
+                a.pop(k, None)
+            else:
+                a[k] = val
     save(cfg)
-    print(f"{a['name']}: {' '.join(a.get('args') or []) or '(no flags)'}")
+    cmd_config(cfg, [])
 
 
 def cmd_run(cfg, args, check=True):
@@ -336,7 +442,7 @@ def cmd_run(cfg, args, check=True):
     extra = args[1:]
     if "--handoff" in extra:
         extra = [x for x in extra if x != "--handoff"] + [_handoff_prompt()]
-    os.execvpe(a["vendor"], [a["vendor"], *a.get("args", []), *extra], env_for(a))
+    os.execvpe(a["vendor"], [a["vendor"], *launch_flags(a), *extra], env_for(a))
 
 
 def rank(u):
@@ -412,7 +518,7 @@ def cmd_auto(cfg, args):
     print(f"oms: {best['name']} ({why})", file=sys.stderr)
     if "--handoff" in rest:
         rest = [x for x in rest if x != "--handoff"] + [_handoff_prompt()]
-    os.execvpe(vendor, [vendor, *best.get("args", []), *rest], env_for(best))
+    os.execvpe(vendor, [vendor, *launch_flags(best), *rest], env_for(best))
 
 
 # --- status line rendering ---------------------------------------------------
@@ -497,6 +603,11 @@ def _session_line(d, width):
 def _table(rows, columns, max_rows=4):
     """One account per row; each window gets a column, shortest first.
 
+    Every row starts with its name, never with padding. Claude Code strips leading
+    whitespace from each status line, so a leading marker column survives only on the
+    rows that have a marker and collapses on the rest, pulling them out of line. The
+    marker goes after the name instead, inside the name field.
+
     The column a meter sits in says which window it is, so the 5h / 7d labels that were
     repeated against every account come out entirely. Cells are a fixed width, so the
     columns line up down the table however many accounts there are.
@@ -504,7 +615,7 @@ def _table(rows, columns, max_rows=4):
     if not rows:
         return [], 0
     labels = sorted({l for _, _, wins, _ in rows for l in wins}, key=_mins)
-    name_w = max(_wide(n) for _, n, _, _ in rows)
+    name_w = max(_wide(n) + _wide(m) for m, n, _, _ in rows) + 1
     cell_w = BAR + 5
     extra = len(rows) - max_rows
     if extra > 0:
@@ -512,10 +623,11 @@ def _table(rows, columns, max_rows=4):
     out = []
     for mark, name, wins, blocked_ in rows:
         cells = [_pad(_meter(wins[l], blocked_) if l in wins else "", cell_w) for l in labels]
-        out.append(f"{mark} {_pad(name, name_w)}  " + " ".join(cells).rstrip())
+        head = name + (f" {mark}" if mark.strip() else "")
+        out.append(f"{_pad(head, name_w)}  " + " ".join(cells).rstrip())
     if extra > 0:
-        out[-1] = f"{DIM}  +{extra} more account{'s' if extra > 1 else ''}{RESET}"
-    return out, 2 + name_w + 2 + len(labels) * (cell_w + 1) - 1
+        out[-1] = f"{DIM}+{extra} more account{'s' if extra > 1 else ''}{RESET}"
+    return out, name_w + 2 + len(labels) * (cell_w + 1) - 1
 
 
 def cmd_statusline(cfg, args):
@@ -553,8 +665,8 @@ def cmd_statusline(cfg, args):
         limit = (here or {}).get("block_at", cfg["block_at"])
         paid = (here or {}).get("paid_overflow", True)
         bad = paid and max(live.values()) >= limit
-        rows.append((f"{RED}!{RESET}" if bad else f"{GREEN}▸{RESET}",
-                     f"{BOLD}{name or 'claude'}{RESET}", live, bad))
+        rows.append((f"{RED}!{RESET}" if bad else "",
+                     f"{BOLD}{GREEN}{name or 'claude'}{RESET}", live, bad))
     rest = []
     for a in cfg["accounts"]:
         if a["name"] == name:
@@ -566,7 +678,7 @@ def cmd_statusline(cfg, args):
                      sel_key(cfg, a, u), a, u))
     for *_, a, u in sorted(rest, key=lambda t: t[:3]):
         b = bool(blocked(a, u, cfg["block_at"]))
-        rows.append((f"{RED}!{RESET}" if b else " ",
+        rows.append((f"{RED}!{RESET}" if b else "",
                      f"{DIM}{a['name']}{RESET}", dict(u["windows"]), b))
 
     body, width = _table(rows, int(os.environ.get("COLUMNS") or 80))
@@ -709,18 +821,38 @@ def selftest():
     assert "Opus" in _session_line({"model": {"display_name": "Opus"}}, 60)
     assert _session_line({}, 60) is None
     assert _mins("5h") < _mins("7d") < _mins("zz"), "columns run shortest window first"
+    assert _coerce("block_at", "90") == 90 and _coerce("paid_overflow", "no") is False
+    assert _coerce("args", "--model opus") == ["--model", "opus"]
+    assert _coerce("args", "") is None and _coerce("priority", "auto") is None
+    assert _coerce("priority", "a, b") == ["a", "b"]
+    # one setting, each vendor's own spelling
+    assert launch_flags({"vendor": "claude", "effort": "high"}) == ["--effort", "high"]
+    assert launch_flags({"vendor": "codex", "effort": "high"}) == \
+        ["-c", 'model_reasoning_effort="high"']
+    assert launch_flags({"vendor": "codex", "model": "gpt-5.3-codex"}) == ["-m", "gpt-5.3-codex"]
+    assert launch_flags({"vendor": "claude", "context": 500}) == [], \
+        "a setting the vendor has no flag for must not leak into its argv"
+    assert launch_flags({"vendor": "codex", "model": "m", "args": ["--raw"]})[-1] == "--raw"
     mk = lambda n, w: (" ", n, w, False)
     body, _ = _table([mk("a", {"5h": 10, "7d": 20}), mk("b", {"7d": 30})], 80)
     # a missing window leaves its column empty rather than shifting the next one into it
     plain = [re.sub(r"\x1b\[[0-9;]*m", "", b) for b in body]
     assert plain[1].index("30%") == plain[0].index("20%")
+    marked, _ = _table([("!", "a", {"7d": 1}, True), ("", "bbbb", {"7d": 2}, False)], 80)
+    marked_plain = [re.sub(r"\x1b\[[0-9;]*m", "", b) for b in marked]
+    assert marked_plain[0].index("1%") == marked_plain[1].index("2%"), \
+        "a marker must not shift its row"
+    assert not any(b.startswith(" ") for b in marked_plain), \
+        "no row may lead with whitespace: Claude Code strips it and the row slides left"
+    assert all(ord(ch) < 128 for b in marked_plain for ch in b if ch not in "▬─"), \
+        "only the bar may use non-ASCII; an ambiguous-width marker breaks alignment"
     assert "+2 more accounts" in _table([mk(str(i), {"7d": i}) for i in range(6)], 80, 4)[0][-1]
     print("ok")
 
 
 CMDS = {"status": cmd_status, "add": cmd_add, "run": cmd_run, "auto": cmd_auto,
         "login": cmd_login, "rename": cmd_rename, "priority": cmd_priority,
-        "config": cmd_config, "handoff": cmd_handoff, "check": cmd_check,
+        "config": cmd_config, "set": cmd_set, "handoff": cmd_handoff, "check": cmd_check,
         "statusline": cmd_statusline, "install": cmd_install, "env": cmd_env}
 USAGE_TEXT = __doc__ + """
   oms login <claude|codex>             log in to a new account, then name it
@@ -731,7 +863,8 @@ USAGE_TEXT = __doc__ + """
   oms auto <claude|codex> [args...]    launch the freest account that can't bill you
   oms rename <old> <new>               rename an account, keeping its usage history
   oms priority [<name>... | --auto]    show or set the order `oms auto` picks in
-  oms config [<name> <flags...>]       vendor flags to launch an account with
+  oms config                           every setting, global and per account
+  oms set [<account>] key=value ...    change any of them
   oms handoff [- | --clear]            the brief carried into the next session
   oms run <name> --handoff             launch carrying that brief as the first prompt
   oms env <name>                       print the export line for a shell

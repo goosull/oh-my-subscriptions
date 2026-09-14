@@ -24,11 +24,25 @@ With the status line installed, every account stays visible while you work — t
 you're in with both its windows, the rest with their hottest one:
 
 ```
-Opus 5  high  ctx ▬▬▬▬▬▬▬─── 68% left of 1M
-▸ claude-main  ▬▬▬─────  34% ▬▬▬▬▬▬▬─  88%
-  claude-alt   ▬───────  12% ▬▬──────  31%
-! codex-main   ▬▬▬▬▬▬▬▬  97% ▬▬▬─────  40%
+Opus 5  high  ctx ▬▬▬▬▬▬──── 61% left of 1M
+claude-main   ▬▬▬▬────  44% ▬▬──────  27%
+claude-alt    ────────   0% ▬───────   8%
+codex-main !                ▬▬▬▬▬▬▬▬  97%
 ```
+
+One account per row, one column per window ordered shortest first — so the column a
+meter sits in says which window it is, and the labels that used to repeat against every
+account are gone. An account with no short window leaves that column empty rather than
+sliding into it. The account you are in is the bright one; `!` marks an account that
+would bill you.
+
+Every row starts with its name rather than with indentation, because Claude Code strips
+leading whitespace from a status line and a leading marker column would collapse on
+exactly the rows that lack a marker.
+
+The first line is the session itself — model, reasoning effort, and context left. Every
+bar fills in the direction of its number: account meters fill as quota is spent, the
+context meter drains as context is used.
 
 One account per row, one column per window, shortest first — so the column a meter
 sits in says which window it is, and the labels that used to repeat against every
@@ -130,21 +144,29 @@ Override it with an explicit order, `oms priority codex-b codex-a`, and go back 
 one. Priority is only about order — an account that could bill you is skipped by the
 guard below no matter where it sits.
 
-## Per-account settings
+## Settings
 
-Each account can carry flags that are handed to its vendor's CLI on every launch, so a
-spare account can run a cheaper model, or one account can default to high effort:
+One vocabulary, translated into each vendor's own spelling at launch. `oms set` is the
+only thing that writes a setting; `oms config` shows them all.
 
 ```bash
-oms config claude-alt --model sonnet
-oms config codex-main -c 'model_reasoning_effort="high"'
-oms config                              # what every account launches with
-oms config claude-alt --clear
+oms set all effort=high           # --effort high for claude, -c model_reasoning_effort for codex
+oms set codex-main model=gpt-5.3-codex
+oms set claude-alt name=spare     # renames, carrying its usage with it
+oms set block_at=90               # global
+oms config                        # every setting, and what each account will launch as
 ```
 
-There is no translation layer — these are the vendor's own flags, so anything `claude`
-or `codex` accepts works, including `-c <key>=<value>` for any codex config key. Stored
-flags go in front of anything you type at the call site, so an explicit flag still wins.
+| key | claude | codex |
+|---|---|---|
+| `model` | `--model` | `-m` |
+| `effort` | `--effort` | `-c model_reasoning_effort=` |
+| `context` | — window comes from the model | `-c model_context_window=` |
+| `args` | appended raw, for anything not covered | |
+
+A key the vendor has no flag for is refused rather than stored, so nothing sits in your
+config quietly doing nothing. Per-account: `model`, `effort`, `context`, `args`,
+`paid_overflow`, `block_at`. Global: `block_at`, `warn_at`, `priority`.
 
 ## Before you hit the wall
 
