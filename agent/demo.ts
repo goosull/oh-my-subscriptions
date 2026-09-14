@@ -65,7 +65,8 @@ const WORTH_SWITCHING = 4000;
 
 const route = (ask: Ask): Engine => {
   const want = roleFor(ask);
-  const price = ask.priceOf(want);
+  // what moving costs over staying, not what the request costs at all
+  const price = ask.penaltyOf(want);
   const role = ask.current && want !== ask.current && price > WORTH_SWITCHING
     ? (ask.current as Role)      // the move costs more than it would buy
     : want;

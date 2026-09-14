@@ -3,7 +3,10 @@
 An agent whose loop is ours and whose transport is not.
 
 ```bash
-bun install && bun run demo.ts
+bun install
+bun run demo    # one turn, two engines, routed on real subscriptions
+bun run cost    # what a switch costs, at different points in a conversation
+bun test        # what the loop must not get wrong
 ```
 
 ```
@@ -77,8 +80,13 @@ pays for the whole history. A design that swaps engines every other request woul
 more re-sending context than it saves on the cheaper model.
 
 The loop keeps this count itself. `Ledger` tracks how much each engine has been shown,
-every turn ends with what routing cost, and the router is handed `priceOf(engine)` before
-it decides — because the router is what spends the money, and it was deciding blind.
+every turn ends with what routing cost, and the router is handed the price before it
+decides — because the router is what spends the money, and it was deciding blind.
+
+Two numbers, because they are not the same: `priceOf(engine)` is everything that engine
+would be sent uncached, which includes whatever is simply new since the last request and
+which every engine pays alike. `penaltyOf(engine)` is what moving there costs *over
+staying*, and that is the one a router decides on.
 
 With a price in hand it can refuse:
 

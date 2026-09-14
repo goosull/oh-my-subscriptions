@@ -3,7 +3,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "demo": "bun run demo.ts"
+    "demo": "bun run demo.ts",
+    "cost": "bun run cost.ts",
+    "test": "bun test"
   },
   "dependencies": {
     "@oh-my-pi/pi-ai": "^18.1.21"

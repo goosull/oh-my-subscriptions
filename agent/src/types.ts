@@ -46,12 +46,19 @@ export interface Ask {
   /** Who answered the previous request, if anyone has yet. */
   current?: string;
   /**
-   * What sending this request to `engine` would cost in characters no cache can cover,
-   * because that engine has not been shown them. Staying put is usually near zero;
-   * moving is the whole conversation so far. The router decides what to spend, so it
-   * is the one place that has to be able to see the price.
+   * Characters `engine` would be sent with no cache behind them, because it has not
+   * been shown them. Two different things land in here: what is simply new since the
+   * last request, which every engine pays for, and what went to somebody else, which
+   * only a newcomer pays for.
    */
   priceOf(engine: string): number;
+  /**
+   * What moving to `engine` costs over staying where we are — `priceOf(engine)` less
+   * what the current engine would be charged anyway. This is the number a router is
+   * actually deciding on, and it is zero on the first request of a conversation, when
+   * nobody is warm and there is nothing to leave.
+   */
+  penaltyOf(engine: string): number;
 }
 
 /** The decision this whole project is about. */

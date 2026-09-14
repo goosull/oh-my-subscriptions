@@ -52,9 +52,10 @@ export async function* run(
 
   for (let step = 0; step < limit; step++) {
     const size = measure(transcript);
+    const priceOf = (id: string) => size - Math.min(seen.get(id) ?? 0, size);
     const ask: Ask = {
-      transcript, since, step, current: last || undefined,
-      priceOf: id => size - Math.min(seen.get(id) ?? 0, size),
+      transcript, since, step, current: last || undefined, priceOf,
+      penaltyOf: id => (last ? Math.max(0, priceOf(id) - priceOf(last)) : 0),
     };
     const engine = await loop.route(ask);
     const warm = seen.get(engine.id) ?? 0;
