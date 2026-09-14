@@ -95,6 +95,16 @@ if hooks_file.exists():
                            f"at people who install this")
     print(f"checked {sum(len(v) for v in hooks.values())} hook(s)")
 
+# An edit that misses its anchor leaves the old text in place and says nothing, so a
+# section can end up described two or three times, each copy a different vintage. The
+# oldest ones describe behaviour that no longer exists.
+import collections
+seen = collections.Counter(l.strip() for l in readme.splitlines() if len(l.strip()) > 40)
+for line, n in seen.items():
+    if n > 1:
+        bad.append(f"README.md: this sentence appears {n} times, so at least one copy is "
+                   f"describing an older version of the same thing:\n      {line[:72]}...")
+
 print(f"checked {len(list(ROOT.glob('skills/*/SKILL.md')))} skills")
 if bad:
     print("\n" + "\n".join(bad))

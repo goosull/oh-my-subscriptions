@@ -97,31 +97,18 @@ kiro-1        kiro reports no usage
 One account per row, one column per window ordered shortest first — so the column a
 meter sits in says which window it is, and the labels that used to repeat against every
 account are gone. An account with no short window leaves that column empty rather than
-sliding into it. The account you are in is the bright one; `!` marks an account that
-would bill you. An account with nothing to meter keeps its row and says why, so a
-provider that reports no usage does not simply vanish from the list.
+sliding into it. The account you are in is the bright one, `!` marks an account that
+would bill you, and an account with nothing to meter keeps its row and says why instead
+of vanishing from the list.
 
 Every row starts with its name rather than with indentation, because Claude Code strips
 leading whitespace from a status line and a leading marker column would collapse on
-exactly the rows that lack a marker.
+exactly the rows that lack one.
 
-The first line is the session itself — model, reasoning effort, and context left. Every
-bar fills in the direction of its number: account meters fill as quota is spent, the
-context meter drains as context is used.
-
-One account per row, one column per window, shortest first — so the column a meter
-sits in says which window it is, and the labels that used to repeat against every
-account are gone. An account with no short window leaves that column empty rather than
-sliding into it. `▸` is where you are, `!` is an account that would bill you.
-
-The first line is the session itself — model, reasoning effort, and context left. Every
-bar fills in the direction of its number: account meters fill as quota is spent, the
-context meter drains as context is used.
-
-The first line is the session itself — model, reasoning effort, and context headroom —
-so a model swap or a mid-session `/effort` change shows up immediately. Accounts sit
-below it in a grid with columns that line up, laid out so a wrap never strands a lone
-account on the last row.
+The first line is the session itself — model, reasoning effort, and context left — so a
+model swap or a mid-session `/effort` change shows up immediately. Every bar fills in the
+direction of its number: account meters fill as quota is spent, the context meter drains
+as context is used.
 
 Accounts appear in the order `oms auto` would pick them — the one you're in first, then
 its own vendor's alternatives, so the next account to switch to is always the next chip.
