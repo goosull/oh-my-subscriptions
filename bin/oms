@@ -1255,12 +1255,21 @@ def cmd_login(cfg, args):
         # No terminal to ask on, so don't pretend to: take the default and say so loudly.
         name = default
         print(f"\n  no terminal to prompt on, so this is registered as '{name}'."
-              f"\n  rename it with:  oms rename {name} <your-name>\n")
+              f"\n  rename it with:  oms rename {name} <your-name>\n", flush=True)
     if name in taken:
         die(f"'{name}' is already registered. pick another, profile is at {tmp}")
     dest = OMS / "accounts" / name
     dest.parent.mkdir(parents=True, exist_ok=True)
-    tmp.rename(dest)
+    if dest.exists() and dest != tmp:
+        # a profile under this name that no account claims - an earlier login that was
+        # interrupted after signing in and before registering. Renaming onto it fails,
+        # and doing so here would be a traceback handed to someone who has just finished
+        # a browser flow, with the fresh login left somewhere they were never told about.
+        die(f"there is already a profile at {dest} that no account is using.\n"
+            f"  your new login is safe at {tmp}\n"
+            f"  either pick another name, or remove that directory and run this again")
+    if dest != tmp:
+        tmp.rename(dest)
     acct = {"name": name, "vendor": vendor, "dir": str(dest)}
     if vendor == "claude":
         acct["paid_overflow"] = True
@@ -1516,6 +1525,7 @@ def selftest():
     _choices_hold()
     _moving_accounts_is_safe()
     _install_leaves_settings_intact()
+    _login_does_not_lose_a_login()
     print("ok")
 
 
@@ -1638,6 +1648,41 @@ def _install_leaves_settings_intact():
         cmd_install({}, [])          # and it must cope with no settings file at all
         assert "statusline" in json.loads(f.read_text())["statusLine"]["command"]
     DEFAULT_CLAUDE_DIR = keep
+
+
+def _login_does_not_lose_a_login():
+    """A login that cannot be registered must still be findable.
+
+    By the time naming happens the user has completed a browser flow. Failing there with
+    a traceback, and no word of where the credential went, is the most expensive moment
+    in the tool to fail badly at.
+    """
+    import contextlib
+    import io
+    import tempfile
+    global OMS, CFG, USAGE
+    keep, said = (OMS, CFG, USAGE), []
+    real_run, real_installed = subprocess.run, installed
+    with tempfile.TemporaryDirectory() as d, contextlib.redirect_stdout(io.StringIO()):
+        OMS = Path(d)
+        CFG, USAGE = OMS / "config.json", OMS / "usage"
+        orphan = OMS / "accounts" / "codex-2"           # an earlier login, interrupted
+        orphan.mkdir(parents=True)
+        (orphan / "auth.json").write_text("{}")
+        globals()["installed"] = lambda v: True
+        globals()["subprocess"].run = lambda *a, **k: type("R", (), {"returncode": 0})()
+        real_die, globals()["die"] = die, lambda m: (said.append(m), sys.exit(1))[1]
+        try:
+            cmd_login({"accounts": [], "block_at": 95}, ["codex"])
+        except SystemExit:
+            pass
+        finally:
+            globals()["die"] = real_die
+        assert said, "a name collision must be reported, not raised as OSError"
+        assert "pending" in said[0], "and must say where the new login was left"
+        assert orphan.exists(), "and must not overwrite the profile already there"
+    OMS, CFG, USAGE = keep
+    globals()["subprocess"].run, globals()["installed"] = real_run, real_installed
 
 
 def _choices_hold():
