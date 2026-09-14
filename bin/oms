@@ -588,7 +588,7 @@ def _session_line(d, width):
     left = f"{BOLD}{mdl}{RESET}"
     if (d.get("effort") or {}).get("level"):
         # three weights: model bold, effort plain, the rest dim
-        left += f"  {d['effort']['level']}"
+        left += f" {d['effort']['level']}"
     rem = cw.get("remaining_percentage")
     if rem is None and cw.get("used_percentage") is not None:
         rem = 100 - cw["used_percentage"]
