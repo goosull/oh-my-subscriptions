@@ -69,7 +69,7 @@ def claude_usage(acct):
 
 # Bump whenever the shape of a usage dict changes, so a cache written by an older
 # build is discarded instead of quietly serving a record with fields missing.
-CACHE_V = 3
+CACHE_V = 4
 
 
 def codex_usage(acct):
@@ -79,11 +79,77 @@ def codex_usage(acct):
         if d.pop("v", 0) == CACHE_V:
             d["age"] = time.time() - d.pop("at", time.time())
             return d
-    u = _codex_scan(acct)
+    u = _from_rpc(acct, _codex_rpc(acct)) or _codex_scan(acct)
     if not u.get("err"):
         USAGE.mkdir(parents=True, exist_ok=True)
         c.write_text(json.dumps({**u, "at": time.time() - u["age"], "v": CACHE_V}))
     return u
+
+
+def _codex_rpc(acct, timeout=12):
+    """Ask codex itself, over the JSON-RPC protocol its app-server speaks.
+
+    Better than reading the rollout files: it answers for an account you have not used
+    lately instead of replaying the last conversation's snapshot, and it carries the
+    absolute credit allowance the rollouts leave out.
+    """
+    import threading
+    try:
+        pr = subprocess.Popen([provider(acct)["bin"], "app-server"],
+                              stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                              stderr=subprocess.DEVNULL, text=True, env=env_for(acct))
+    except OSError:
+        return None
+    got = {}
+
+    def pump():
+        for line in pr.stdout:
+            try:
+                m = json.loads(line)
+            except ValueError:
+                continue
+            if m.get("id") == 2:
+                got["r"] = m.get("result")
+                break
+    t = threading.Thread(target=pump, daemon=True)
+    t.start()
+    try:
+        for msg in ({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                     "params": {"clientInfo": {"name": "oms", "title": "oms",
+                                               "version": "1"}}},
+                    {"jsonrpc": "2.0", "id": 2, "method": "account/rateLimits/read",
+                     "params": {}}):
+            pr.stdin.write(json.dumps(msg) + "\n")
+        pr.stdin.flush()
+        t.join(timeout)
+    except (BrokenPipeError, OSError):
+        pass
+    finally:
+        pr.kill()
+    return got.get("r")
+
+
+def _from_rpc(acct, r):
+    rl = (r or {}).get("rateLimits") or {}
+    pw, sw = rl.get("primary") or {}, rl.get("secondary") or {}
+    if not pw and not sw:
+        return None
+    cr, il = rl.get("credits") or {}, rl.get("individualLimit") or {}
+    wins = [(_win(w.get("windowDurationMins")), float(w.get("usedPercent") or 0))
+            for w in (pw, sw) if w]
+    pct = max((p for _, p in wins), default=0)
+    hot = pw if (pw.get("usedPercent") or 0) >= (sw.get("usedPercent") or 0) else sw
+    short = next((float(w["usedPercent"]) for w in (pw, sw)
+                  if w and (w.get("windowDurationMins") or 10 ** 9) <= 360), None)
+    detail = "  ".join(f"{l} {p:.0f}%" for l, p in wins)
+    if il.get("limit"):
+        detail += f"  ({float(il.get('used') or 0):.0f}/{float(il['limit']):.0f} cr)"
+    return {"plan": rl.get("planType", "?"), "pct": pct, "resets": hot.get("resetsAt"),
+            "short_pct": short, "window": _win(hot.get("windowDurationMins")),
+            "windows": wins, "age": 0,
+            "size": float(il["limit"]) if il.get("limit") else None,
+            "paid_on": bool(cr.get("hasCredits")) or float(cr.get("balance") or 0) > 0,
+            "detail": detail}
 
 
 def _codex_scan(acct):
@@ -638,7 +704,7 @@ def rank(u, acct=None):
     """
     wins = u.get("windows") or []
     soonest = min((_mins(l) for l, _ in wins), default=10 ** 9)
-    size = (acct or {}).get("size")
+    size = u.get("size") if u.get("size") is not None else (acct or {}).get("size")
     pct = next((p for l, p in wins if _mins(l) == soonest), u.get("pct", 0))
     return (soonest, size if size is not None else float("inf"), pct)
 

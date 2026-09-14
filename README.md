@@ -107,7 +107,7 @@ line you already had. Restart Claude Code and the numbers start filling in.
 | | isolation | where the numbers come from |
 |---|---|---|
 | claude | `CLAUDE_CONFIG_DIR=<dir>` | `rate_limits` in the [statusLine stdin JSON](https://code.claude.com/docs/en/statusline) |
-| codex | `CODEX_HOME=<dir>` | `rate_limits` in the session rollout files codex writes under that dir |
+| codex | `CODEX_HOME=<dir>` | `account/rateLimits/read` over the JSON-RPC its `app-server` speaks |
 | kiro | `KIRO_HOME=<dir>` — settings and sessions only | credits metered per turn in its session files — a floor |
 
 Kiro is a partial fit and oms says so rather than pretending. `KIRO_HOME` moves its
@@ -115,6 +115,10 @@ settings and sessions, but not its login: the credential is a single machine-wid
 keychain entry, and a brand new `KIRO_HOME` still reports the account already signed in.
 So Kiro holds **one login at a time** — registering a second Kiro account warns that
 logging into it signs the other out.
+
+For codex that answers for an account you have not touched in days, and carries the
+absolute credit allowance too, so `size` sets itself. Claude has no equivalent, so its
+figure is only as fresh as its last session — which is what `AS OF` is for.
 
 Kiro has no usage command — `user` is only login/logout/whoami, `profile` is for IdC
 accounts, and the real balance lives server-side behind `kiro-cli dashboard`, which just
