@@ -30,6 +30,11 @@ Other tools rotate accounts when one hits a wall. The point of this one is the w
 will not let you walk through: a plan with paid overflow enabled does not stop at its
 ceiling, it starts charging, and `oms` refuses to launch it before that happens.
 
+This repository holds two things. `oms` is the tool below, and `agent/` is an agent
+being built on what it knows — one conversation routed across several subscriptions,
+which is what having them in one place is ultimately for. They are independent: `oms`
+needs nothing from `agent/`.
+
 ## Install
 
 One file, Python 3 standard library only, no dependencies:

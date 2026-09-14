@@ -1,0 +1,38 @@
+name: check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  oms:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with: { python-version: "3.11" }
+      # oms is one stdlib-only file, so there is nothing to install
+      - run: ./bin/oms --selftest
+      - run: python3 .github/check-docs.py
+      - name: a fresh machine can add an account and be told what is missing
+        run: |
+          export OMS_HOME="$RUNNER_TEMP/oms"
+          ./bin/oms status 2>&1 | grep -q "no accounts yet"
+          ./bin/oms add probe codex
+          ./bin/oms status | grep -q probe
+          ./bin/oms config | grep -q probe
+          ./bin/oms remove probe --purge
+
+  agent:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile
+        working-directory: agent
+      - run: bun test
+        working-directory: agent
+      - name: the demo and the cost model still run
+        run: bun run cost.ts
+        working-directory: agent
