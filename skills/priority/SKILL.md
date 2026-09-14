@@ -19,10 +19,15 @@ run `oms status` and match it to a real account name before running anything.
 
 ## The automatic rule, if they ask why
 
-A 5-hour window refills four or five times a day, so quota still sitting in it when the
-window resets is gone — it cannot be banked. A weekly-only pool is a fixed budget worth
-the same whenever it is spent. So `oms` drains short windows first and keeps weekly-only
-accounts in reserve, and within each group prefers whoever has the most room.
+Soonest reset first, then smallest pool. A window that refills often cannot be banked —
+quota still in a 5-hour window when it resets is gone — so the shorter the reset
+interval, the more urgent it is to spend. Among accounts resetting on the same cadence
+the smaller pool goes first, since it runs out sooner and is worth less held back.
+
+Pool size is not something oms can read: neither vendor reports an absolute quota, only
+a percentage. It comes from `oms set <account> size=N`, any number comparable across the
+user's own accounts. If they ask why two accounts on the same cadence are in the order
+they are, check whether either has a size set before explaining.
 
 This is about *order*, not safety. An account that could bill the user is skipped by the
 paid-credit guard regardless of where it sits in the priority list.

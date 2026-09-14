@@ -158,69 +158,29 @@ Switching also happens at launch, not mid-session: a running CLI holds its own s
 
 ## Which account gets used first
 
-A 5-hour window refills four or five times a day, so quota still sitting in it when the
-window resets is gone — it cannot be banked. A weekly-only pool is a fixed budget worth
-the same whenever it is spent. So `oms auto` drains short windows first and keeps
-weekly-only accounts in reserve, preferring the most headroom within each group.
+`oms auto` picks by **soonest reset first, then smallest pool.** A window that refills
+often cannot be banked — quota still sitting in a 5-hour window when it resets is simply
+gone — so the shorter the reset interval, the more urgent it is to spend. Among accounts
+that reset on the same cadence, the smaller pool goes first: it runs out sooner and is
+worth less held in reserve.
 
 ```
 $ oms priority
-priority: automatic - short windows first, then most headroom
+priority: automatic - soonest reset first, then smallest pool
 
-  codex 1. codex-main         5h at 0%, expires on reset
-  codex 2. codex-alt         weekly pool, 51% used
+  codex 1. codex-main     resets every 5h, 0% used
+  codex 2. codex-alt      resets every 7d, 56% used, pool 100
 ```
 
-Override it with an explicit order, `oms priority codex-alt codex-main`, and go back with
-`oms priority --auto`. Accounts you leave out still get used, just after every listed
-one. Priority is only about order — an account that could bill you is skipped by the
-guard below no matter where it sits.
+Pool size is whatever you set: `oms set codex-alt size=100`. It is any number you can
+compare across your own accounts — oms cannot read it, because neither vendor reports an
+absolute quota, only a percentage. An account with no size set sorts after ones that
+have it.
 
-## Settings
-
-One vocabulary, translated into each vendor's own spelling at launch. `oms set` is the
-only thing that writes a setting; `oms config` shows them all.
-
-```bash
-oms set all effort=high           # --effort high for claude, -c model_reasoning_effort for codex
-oms set codex-main model=gpt-5.3-codex
-oms set claude-alt name=spare     # renames, carrying its usage with it
-oms set block_at=90               # global
-oms config                        # every setting, and what each account will launch as
-```
-
-| key | claude | codex |
-|---|---|---|
-| `model` | `--model` | `-m` |
-| `effort` | `--effort` | `-c model_reasoning_effort=` |
-| `context` | — window comes from the model | `-c model_context_window=` |
-| `args` | appended raw, for anything not covered | |
-
-A key the vendor has no flag for is refused rather than stored, so nothing sits in your
-config quietly doing nothing. Per-account: `model`, `effort`, `context`, `args`,
-`paid_overflow`, `block_at`. Global: `block_at`, `warn_at`, `priority`.
-
-## Before you hit the wall
-
-Claude Code offers to switch accounts once you have already hit the limit — by which
-point there is no context budget left to write a handoff with. The plugin's
-`UserPromptSubmit` hook fires earlier, at ten points below the block threshold, naming
-the account with room so the switch can be prepared rather than scrambled. Set
-`"warn_at": N` in `~/.oms/config.json` to move it.
-
-## Switching without losing the thread
-
-A session cannot move between accounts: its transcript is written with the account that
-owns it, and codex and claude share no transcript format. So `oms` carries a brief
-rather than pretending to resume a conversation.
-
-```bash
-/oms:handoff                      # Claude writes a brief from the current session
-oms run claude-alt --handoff      # it becomes the first prompt over there
-oms auto codex --handoff          # works across vendors too, it is only text
-```
-
-`oms handoff -` takes a brief on stdin if you would rather write it yourself.
+Override the whole thing with an explicit order, `oms priority codex-alt codex-main`,
+and go back with `oms priority --auto`. Accounts you leave out still get used, just
+after every listed one. Priority is only about order — an account that could bill you is
+skipped by the guard below no matter where it sits.
 
 ## The paid-credit guard
 

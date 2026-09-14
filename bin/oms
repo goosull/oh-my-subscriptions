@@ -437,6 +437,7 @@ GLOBAL_KEYS = {
 }
 ACCOUNT_KEYS = {
     "name": "what the account is called",
+    "size": "how big this plan's pool is, any comparable number; smaller is spent first",
     "model": "model to launch with, in that vendor's own model names",
     "effort": "reasoning effort: low, medium, high, xhigh, max (codex also minimal)",
     "context": "context window in tokens (codex only; claude takes it from the model)",
@@ -459,6 +460,13 @@ def _coerce(key, val):
         if not val.isdigit():
             die(f"context takes a number of tokens, got {val!r}")
         return int(val)
+    if key == "size":
+        if not val:
+            return None
+        try:
+            return float(val)
+        except ValueError:
+            die(f"size takes a number, got {val!r}")
     if key in ("model", "effort"):
         return val or None
     if key == "priority":
@@ -555,17 +563,21 @@ def cmd_run(cfg, args, check=True):
     os.execvpe(b, [b, *launch_flags(a), *extra], env_for(a))
 
 
-def rank(u):
-    """Sort key for auto-selection.
+def rank(u, acct=None):
+    """Sort key for auto-selection: shortest reset first, then smallest pool.
 
-    A 5-hour window refills four or five times a day, so quota left sitting in it when
-    it resets is simply gone. A weekly-only pool is a fixed budget that is worth the
-    same whenever it is spent. So drain the short windows first and keep the weekly
-    pool in reserve. Within each group, whoever has the most room goes first.
+    A window that refills often cannot be banked - quota still in a 5-hour window when
+    it resets is simply gone - so the shorter the reset interval, the more urgent it is
+    to spend. Among accounts that reset on the same cadence, drain the smaller pool
+    first and keep the larger one in reserve, since the small one runs out sooner and
+    is worth less held back. Pool size is whatever `size` you set on the account; oms
+    cannot read it, because neither vendor reports an absolute quota.
     """
-    if u.get("short_pct") is not None:
-        return (0, u["short_pct"])
-    return (1, u["pct"])
+    wins = u.get("windows") or []
+    soonest = min((_mins(l) for l, _ in wins), default=10 ** 9)
+    size = (acct or {}).get("size")
+    pct = next((p for l, p in wins if _mins(l) == soonest), u.get("pct", 0))
+    return (soonest, size if size is not None else float("inf"), pct)
 
 
 def sel_key(cfg, acct, u):
@@ -573,7 +585,7 @@ def sel_key(cfg, acct, u):
     order = cfg.get("priority") or []
     if acct["name"] in order:
         return (0, order.index(acct["name"]))
-    return (1, *rank(u))
+    return (1, *rank(u, acct))
 
 
 def cmd_priority(cfg, args):
@@ -581,7 +593,7 @@ def cmd_priority(cfg, args):
     if args and args[0] in ("--auto", "auto", "reset"):
         cfg.pop("priority", None)
         save(cfg)
-        print("priority: automatic (short windows first, then most headroom)")
+        print("priority: automatic (soonest reset first, then smallest pool)")
         return
     if args:
         for n in args:
@@ -590,7 +602,7 @@ def cmd_priority(cfg, args):
         save(cfg)
     order = cfg.get("priority")
     if not order:
-        print("priority: automatic - short windows first, then most headroom\n")
+        print("priority: automatic - soonest reset first, then smallest pool\n")
         for v in ("claude", "codex"):
             ranked = []
             for a in cfg["accounts"]:
@@ -600,9 +612,14 @@ def cmd_priority(cfg, args):
                 if u.get("err"):
                     continue
                 ranked.append((sel_key(cfg, a, u), a["name"], u))
-            for i, (_, n, u) in enumerate(sorted(ranked, key=lambda t: t[0]), 1):
-                why = (f"5h at {u['short_pct']:.0f}%, expires on reset"
-                       if u.get("short_pct") is not None else f"weekly pool, {u['pct']:.0f}% used")
+            for i, (k, n, u) in enumerate(sorted(ranked, key=lambda t: t[0]), 1):
+                wins = u.get("windows") or []
+                soonest = min((_mins(l) for l, _ in wins), default=None)
+                lab = next((l for l, _ in wins if _mins(l) == soonest), "?")
+                sz = k[2] if len(k) > 2 else None
+                why = (f"resets every {lab}, {k[-1]:.0f}% used"
+                       + (f", pool {sz:g}" if isinstance(sz, (int, float))
+                          and sz != float("inf") else ""))
                 print(f"  {v} {i}. {n:<14} {why}")
         return
     print("priority: explicit\n  " + "\n  ".join(f"{i}. {n}" for i, n in enumerate(order, 1)))
@@ -955,10 +972,13 @@ def selftest():
     assert _win(10080) == "7d" and _win(300) == "5h" and _win(None) == "?"
     assert _until(time.time() + 7260).startswith("2h") and _until(0) == "-"
     assert _until(time.time() - 5) == "now"
-    # a short window that resets today outranks any weekly-only pool, however empty
-    assert rank({"short_pct": 90, "pct": 90}) < rank({"short_pct": None, "pct": 0})
-    assert rank({"short_pct": 10, "pct": 99}) < rank({"short_pct": 80, "pct": 5})
-    assert rank({"short_pct": None, "pct": 20}) < rank({"short_pct": None, "pct": 70})
+    w5, w7 = {"windows": [("5h", 90)]}, {"windows": [("7d", 0)]}
+    # a window that resets sooner outranks a longer one, however empty the longer one is
+    assert rank(w5) < rank(w7)
+    assert rank({"windows": [("5h", 10)]}) < rank({"windows": [("5h", 80)]})
+    # same cadence: the smaller pool is spent first, and an unstated size sorts last
+    assert rank(w7, {"size": 100}) < rank(w7, {"size": 5000}) < rank(w7, {})
+    assert rank({"windows": [("5h", 99)]}, {"size": 9}) < rank(w7, {"size": 1})
     cfg_ = {"priority": ["b"], "accounts": []}
     assert sel_key(cfg_, {"name": "b"}, {"pct": 99}) < sel_key(cfg_, {"name": "a"}, {"pct": 0}), \
         "an explicitly listed account outranks any unlisted one"
