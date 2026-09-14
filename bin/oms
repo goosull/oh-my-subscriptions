@@ -1505,9 +1505,9 @@ def _pace_reads_the_trail():
         # from the wall must still warn, and high but barely moving must not
         cfg = {"accounts": [], "block_at": 95}
         fast = reading([("7d", 70)], resets=reset, paid_on=True)
-        trail([{"at": now - 3600, "pct": 30, "resets": reset},
+        trail([{"at": now - 3600, "pct": 10, "resets": reset},
                {"at": now, "pct": 70, "resets": reset}])
-        assert pace(acct, fast)["hits_at"] - now < WARN_WITHIN, "40%/h from 70% is minutes away"
+        assert pace(acct, fast)["hits_at"] - now < WARN_WITHIN, "60%/h from 70% is minutes away"
         trail([{"at": now - 7200, "pct": 68, "resets": reset},
                {"at": now, "pct": 70, "resets": reset}])
         assert pace(acct, fast)["hits_at"] - now > WARN_WITHIN, "1%/h from 70% is not"
