@@ -17,6 +17,10 @@ export interface Account {
   reason?: string;
   plan?: string;
   used_percent?: number;
+  /** The fullest window: what stops this account first. */
+  binding?: { window: string; used_percent: number };
+  /** The window that resets first: what evaporates unspent, and what the order runs on. */
+  soonest?: { window: string; used_percent: number };
   windows?: { window: string; used_percent: number }[];
   resets_at?: number;
   /** True when hitting the ceiling on this account is charged rather than refused. */

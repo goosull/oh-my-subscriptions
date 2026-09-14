@@ -487,8 +487,13 @@ def _status_json(cfg):
         else:
             b = blocked(a, u, cfg["block_at"])
             row.update(available=not b, blocked=b, plan=u.get("plan"),
-                       used_percent=u["pct"], windows=[{"window": w, "used_percent": p}
-                                                       for w, p in u.get("windows") or []],
+                       used_percent=u["pct"],
+                       # named, so a consumer never has to work out which is which -
+                       # the mistake this file kept making internally
+                       binding={"window": u["binding"][0], "used_percent": u["binding"][1]},
+                       soonest={"window": u["soonest"][0], "used_percent": u["soonest"][1]},
+                       windows=[{"window": w, "used_percent": p}
+                                for w, p in u.get("windows") or []],
                        resets_at=u.get("resets"), pays_on_overflow=u["paid_on"],
                        floor=bool(u.get("floor")),
                        key=[None if isinstance(k, float) and k == float("inf") else k
