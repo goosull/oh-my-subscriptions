@@ -133,6 +133,19 @@ or changes the pick order, `/oms:config` sets an account's model or effort,
 to another account.
 
 
+## Working on it
+
+```bash
+git config core.hooksPath .githooks   # once: refuses a commit the checks would fail
+./bin/oms --selftest                  # the tool, including that the guard stops a launch
+python3 .github/check-docs.py         # that nothing documents a command the CLI lacks
+cd agent && bun test                  # the loop
+```
+
+The same checks run in CI. The hook exists because they found a red selftest after it
+was already pushed, which is a broken branch and a second commit apologising for the
+first.
+
 ## Providers
 
 | | isolation | where the numbers come from |
