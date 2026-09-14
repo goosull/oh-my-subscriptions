@@ -164,7 +164,7 @@ priority: automatic - short windows first, then most headroom
   codex 2. codex-alt         weekly pool, 51% used
 ```
 
-Override it with an explicit order, `oms priority codex-alt codex-a`, and go back with
+Override it with an explicit order, `oms priority codex-alt codex-main`, and go back with
 `oms priority --auto`. Accounts you leave out still get used, just after every listed
 one. Priority is only about order — an account that could bill you is skipped by the
 guard below no matter where it sits.
