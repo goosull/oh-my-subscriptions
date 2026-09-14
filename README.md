@@ -28,6 +28,8 @@ claude-main 5h ━━━───── 34%  7d ━━━━━━─ 88%  │  
 codex-main 5h ━━━━━ 97%  7d ━━─── 40%
 ```
 
+Accounts appear in the order `oms auto` would pick them — the one you're in first, then
+its own vendor's alternatives, so the next account to switch to is always the next chip.
 Every window is shown and labelled, so a number is never ambiguous about which quota
 it describes. The status line cannot scroll, so rather than overrun and get truncated
 it wraps at your terminal width (`COLUMNS`, which Claude Code sets for the script) and

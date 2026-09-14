@@ -239,6 +239,14 @@ def rank(u):
     return (1, u["pct"])
 
 
+def sel_key(cfg, acct, u):
+    """Where this account sits in the pick order: explicit list first, else `rank`."""
+    order = cfg.get("priority") or []
+    if acct["name"] in order:
+        return (0, order.index(acct["name"]))
+    return (1, *rank(u))
+
+
 def cmd_priority(cfg, args):
     """Show or set an explicit account order for `oms auto`."""
     if args and args[0] in ("--auto", "auto", "reset"):
@@ -262,8 +270,8 @@ def cmd_priority(cfg, args):
                 u = usage(a)
                 if u.get("err"):
                     continue
-                ranked.append((rank(u), a["name"], u))
-            for i, (_, n, u) in enumerate(sorted(ranked), 1):
+                ranked.append((sel_key(cfg, a, u), a["name"], u))
+            for i, (_, n, u) in enumerate(sorted(ranked, key=lambda t: t[0]), 1):
                 why = (f"5h at {u['short_pct']:.0f}%, expires on reset"
                        if u.get("short_pct") is not None else f"weekly pool, {u['pct']:.0f}% used")
                 print(f"  {v} {i}. {n:<14} {why}")
@@ -275,7 +283,6 @@ def cmd_priority(cfg, args):
 def cmd_auto(cfg, args):
     vendor = args[0] if args and args[0] in ("claude", "codex") else "claude"
     rest = args[1:] if args and args[0] in ("claude", "codex") else args
-    order = cfg.get("priority") or []
     cands = []
     for a in cfg["accounts"]:
         if a["vendor"] != vendor:
@@ -283,8 +290,7 @@ def cmd_auto(cfg, args):
         u = usage(a)
         if u.get("err") or blocked(a, u, cfg["block_at"]):
             continue
-        key = (order.index(a["name"]),) if a["name"] in order else rank(u)
-        cands.append(((a["name"] not in order, key), a, u))
+        cands.append((sel_key(cfg, a, u), a, u))
     if not cands:
         die(f"no {vendor} account is both known-good and unblocked. run 'oms status'")
     _, best, bu = min(cands, key=lambda t: t[0])
@@ -322,7 +328,7 @@ def _bar(pct, width, colour):
 def _meter(pct, blocked_, width, label=""):
     c = _tone(pct, blocked_)
     lab = f"{DIM}{label}{RESET} " if label else ""
-    return f"{lab}{_bar(pct, width, c)} {c}{pct:.0f}%{RESET}"
+    return f"{lab}{_bar(pct, width, c)} {c}{pct:>3.0f}%{RESET}"
 
 
 def cmd_statusline(cfg, args):
@@ -361,12 +367,16 @@ def cmd_statusline(cfg, args):
         paid = (here or {}).get("paid_overflow", True)
         chips.append(_group(name or "claude", live,
                             lambda p: paid and p >= limit, True, 8))
+    rest = []
     for a in cfg["accounts"]:
         if a["name"] == name:
             continue
         u = usage(a)
         if u.get("err") or not u.get("windows"):
             continue
+        rest.append((a["vendor"] != (here or {}).get("vendor"), a["vendor"],
+                     sel_key(cfg, a, u), a, u))
+    for *_, a, u in sorted(rest, key=lambda t: t[:3]):
         b = bool(blocked(a, u, cfg["block_at"]))
         chips.append(_group(a["name"], u["windows"], lambda p, b=b: b, False, 5))
     if chips:
@@ -524,6 +534,11 @@ def selftest():
     assert rank({"short_pct": 90, "pct": 90}) < rank({"short_pct": None, "pct": 0})
     assert rank({"short_pct": 10, "pct": 99}) < rank({"short_pct": 80, "pct": 5})
     assert rank({"short_pct": None, "pct": 20}) < rank({"short_pct": None, "pct": 70})
+    cfg_ = {"priority": ["b"], "accounts": []}
+    assert sel_key(cfg_, {"name": "b"}, {"pct": 99}) < sel_key(cfg_, {"name": "a"}, {"pct": 0}), \
+        "an explicitly listed account outranks any unlisted one"
+    assert _wide(_meter(8, False, 5, "7d")) == _wide(_meter(80, False, 5, "7d")), \
+        "a one-digit and a two-digit reading must occupy the same width, or columns jitter"
     assert "7d" in _meter(8, False, 6, "7d") and "5h" in _meter(8, False, 6, "5h")
     assert _wide(f"{RED}abc{RESET}") == 3, "width must ignore colour escapes"
     wide = ["x" * 30] * 4
