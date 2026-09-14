@@ -67,12 +67,15 @@ export function sender(engine: Engine, model: any, streamFn = stream): Sender {
         messages: toWire(transcript, model),
         tools: tools.map(t => ({ name: t.name, description: t.describe, parameters: t.input })),
       };
+      // The stream's own vocabulary, confirmed against what it emits rather than
+      // guessed: text_start/text_delta/text_end and toolcall_start/_delta/_end, with
+      // the finished call on `toolCall`. Only the _end events carry a complete value.
       const events = streamFn(model, context as any, { signal } as any);
       for await (const ev of events as any) {
         if (ev.type === "text_end") yield { text: ev.content };
-        if (ev.type === "toolcall_end" || ev.type === "toolCall_end") {
-          const c = ev.toolCall ?? ev.content;
-          if (c) yield { call: { id: c.id, tool: c.name, input: c.arguments ?? {} } };
+        if (ev.type === "toolcall_end" && ev.toolCall) {
+          const c = ev.toolCall;
+          yield { call: { id: c.id, tool: c.name, input: c.arguments ?? {} } };
         }
       }
     },

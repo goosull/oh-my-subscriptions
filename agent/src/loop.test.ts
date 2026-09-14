@@ -151,3 +151,23 @@ test("replayed history is stamped with the engine it is sent to, not the one tha
   expect(assistant.provider).toBe("anthropic");
   expect(assistant.model).toBe("claude-x");
 });
+
+test("the stream vocabulary wire.ts reads is the one pi-ai actually emits", async () => {
+  const { createMockModel } = await import("@oh-my-pi/pi-ai");
+  const m = createMockModel({ responses: [{ content: [
+    { type: "text", text: "hi" },
+    { type: "toolCall", name: "shell", arguments: { cmd: "x" } },
+  ] }] });
+
+  const seen = new Set<string>();
+  let finished: any;
+  for await (const ev of m.stream(m.model, { messages: [] } as any) as any) {
+    seen.add(ev.type);
+    if (ev.type === "toolcall_end") finished = ev.toolCall;
+  }
+
+  // wire.ts reads exactly these two, and takes the call off `toolCall`
+  expect(seen.has("text_end")).toBe(true);
+  expect(seen.has("toolcall_end")).toBe(true);
+  expect(finished).toMatchObject({ name: "shell", arguments: { cmd: "x" } });
+});
