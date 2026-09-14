@@ -68,16 +68,10 @@ def claude_usage(acct):
     fh, sd = rl.get("five_hour") or {}, rl.get("seven_day") or {}
     if not fh and not sd:
         return {"err": "no rate_limits in last session"}
-    pct = max(fh.get("used_percentage") or 0, sd.get("used_percentage") or 0)
     hot = fh if (fh.get("used_percentage") or 0) >= (sd.get("used_percentage") or 0) else sd
-    return {"plan": "-", "pct": pct, "resets": hot.get("resets_at"),
-            "short_pct": fh.get("used_percentage") if fh else None,
-            "window": "5h" if hot is fh else "7d",
-            "windows": [(l, w.get("used_percentage") or 0)
-                        for w, l in ((fh, "5h"), (sd, "7d")) if w],
-            "age": time.time() - d.get("at", 0),
-            "paid_on": bool(acct.get("paid_overflow", True)),
-            "detail": f"5h {fh.get('used_percentage', 0):.0f}% / 7d {sd.get('used_percentage', 0):.0f}%"}
+    return reading([(l, w.get("used_percentage")) for w, l in ((fh, "5h"), (sd, "7d")) if w],
+                   resets=hot.get("resets_at"), age=time.time() - d.get("at", 0),
+                   paid_on=acct.get("paid_overflow", True))
 
 
 # --- usage: codex -------------------------------------------------------------
@@ -164,21 +158,14 @@ def _from_rpc(acct, r):
     if not pw and not sw:
         return None
     cr, il = rl.get("credits") or {}, rl.get("individualLimit") or {}
-    wins = [(_win(w.get("windowDurationMins")), float(w.get("usedPercent") or 0))
-            for w in (pw, sw) if w]
-    pct = max((p for _, p in wins), default=0)
+    wins = [(_win(w.get("windowDurationMins")), w.get("usedPercent")) for w in (pw, sw) if w]
     hot = pw if (pw.get("usedPercent") or 0) >= (sw.get("usedPercent") or 0) else sw
-    short = next((float(w["usedPercent"]) for w in (pw, sw)
-                  if w and (w.get("windowDurationMins") or 10 ** 9) <= 360), None)
-    detail = "  ".join(f"{l} {p:.0f}%" for l, p in wins)
+    detail = "  ".join(f"{l} {float(p or 0):.0f}%" for l, p in wins)
     if il.get("limit"):
         detail += f"  ({float(il.get('used') or 0):.0f}/{float(il['limit']):.0f} cr)"
-    return {"plan": rl.get("planType", "?"), "pct": pct, "resets": hot.get("resetsAt"),
-            "short_pct": short, "window": _win(hot.get("windowDurationMins")),
-            "windows": wins, "age": 0,
-            "size": float(il["limit"]) if il.get("limit") else None,
-            "paid_on": bool(cr.get("hasCredits")) or float(cr.get("balance") or 0) > 0,
-            "detail": detail}
+    return reading(wins, plan=rl.get("planType"), resets=hot.get("resetsAt"), detail=detail,
+                   size=float(il["limit"]) if il.get("limit") else None,
+                   paid_on=bool(cr.get("hasCredits")) or float(cr.get("balance") or 0) > 0)
 
 
 def _codex_scan(acct):
@@ -196,17 +183,12 @@ def _codex_scan(acct):
         rl = json.loads(line)["payload"]["rate_limits"]
         pw, sw = rl.get("primary") or {}, rl.get("secondary") or {}
         cr = rl.get("credits") or {}
-        pct = max(pw.get("used_percent") or 0, sw.get("used_percent") or 0)
         hot = pw if (pw.get("used_percent") or 0) >= (sw.get("used_percent") or 0) else sw
-        short = next((w.get("used_percent") for w in (pw, sw)
-                      if w and (w.get("window_minutes") or 10**9) <= 360), None)
-        return {"plan": rl.get("plan_type", "?"), "pct": pct, "resets": hot.get("resets_at"),
-                "short_pct": short, "window": _win(hot.get("window_minutes")),
-                "windows": [(_win(w.get("window_minutes")), w.get("used_percent") or 0)
-                            for w in (pw, sw) if w],
-                "age": time.time() - f.stat().st_mtime,
-                "paid_on": bool(cr.get("has_credits")) or float(cr.get("balance") or 0) > 0,
-                "detail": _cdetail(pw, sw)}
+        return reading([(_win(w.get("window_minutes")), w.get("used_percent"))
+                        for w in (pw, sw) if w],
+                       plan=rl.get("plan_type"), resets=hot.get("resets_at"),
+                       age=time.time() - f.stat().st_mtime, detail=_cdetail(pw, sw),
+                       paid_on=bool(cr.get("has_credits")) or float(cr.get("balance") or 0) > 0)
     return {"err": "no rate_limits recorded yet"}
 
 
@@ -215,6 +197,23 @@ def _cdetail(pw, sw):
     if sw:
         s += f" / {_win(sw.get('window_minutes'))} {sw.get('used_percent', 0):.0f}%"
     return s
+
+
+def reading(windows, *, plan="-", resets=None, paid_on=False, age=0, detail=None, **extra):
+    """The one definition of a usage reading. Every provider goes through here.
+
+    `windows` is [(label, used_percent)] and everything derived from it - which window
+    is binding, which one expires soonest, the headline figure - is derived here once.
+    Four providers deriving it themselves is how `short_pct` came to mean three
+    different things, and how `size` and `floor` ended up on one reading each.
+    """
+    wins = [(l, float(p or 0)) for l, p in windows]
+    hot = max(wins, key=lambda w: w[1], default=("?", 0.0))
+    short = next((p for l, p in wins if _mins(l) <= 360), None)
+    return {"plan": plan or "-", "pct": hot[1], "window": hot[0], "windows": wins,
+            "short_pct": short, "resets": resets, "paid_on": bool(paid_on), "age": age,
+            "detail": detail if detail is not None else "  ".join(f"{l} {p:.0f}%" for l, p in wins),
+            **extra}
 
 
 def _win(mins):
@@ -260,11 +259,9 @@ def _kiro_scan(acct):
     if not seen:
         return {"err": "no metered turns yet"}
     pct = min(100.0, used / float(size) * 100)
-    return {"plan": "-", "pct": pct, "resets": _period_end(acct.get("resets_on", 1)),
-            "short_pct": None, "window": "30d", "windows": [("30d", pct)],
-            "age": 0, "paid_on": bool(acct.get("paid_overflow", False)),
-            "floor": True,
-            "detail": f"30d >={pct:.0f}% ({used:.1f}/{size:g} cr, cli only)"}
+    return reading([("30d", pct)], resets=_period_end(acct.get("resets_on", 1)),
+                   paid_on=acct.get("paid_overflow", False), floor=True, size=float(size),
+                   detail=f"30d >={pct:.0f}% ({used:.1f}/{size:g} cr, cli only)")
 
 
 def _period_start(day):
@@ -1253,6 +1250,13 @@ def selftest():
     assert "Opus" in _session_line({"model": {"display_name": "Opus"}}, 60)
     assert _session_line({}, 60) is None
     assert _mins("5h") < _mins("7d") < _mins("zz"), "columns run shortest window first"
+    r = reading([("5h", 12), ("7d", 40)], plan="pro", paid_on=True)
+    assert r["pct"] == 40 and r["window"] == "7d", "the headline is the binding window"
+    assert r["short_pct"] == 12, "the short window is the one that expires, not the worst"
+    assert reading([("30d", 5)])["short_pct"] is None, "a monthly pool has no short window"
+    assert reading([])["pct"] == 0 and reading([])["windows"] == []
+    assert set(reading([("7d", 1)])) == set(reading([("5h", 1)], size=9)) - {"size"}, \
+        "every reading carries the same fields whoever produced it"
     # monthly periods must roll over the end of a month, and of a year
     import datetime as _dt
     for _day in (1, 15, 28):
