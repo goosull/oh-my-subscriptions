@@ -108,16 +108,24 @@ line you already had. Restart Claude Code and the numbers start filling in.
 |---|---|---|
 | claude | `CLAUDE_CONFIG_DIR=<dir>` | `rate_limits` in the [statusLine stdin JSON](https://code.claude.com/docs/en/statusline) |
 | codex | `CODEX_HOME=<dir>` | `rate_limits` in the session rollout files codex writes under that dir |
-| kiro | `KIRO_HOME=<dir>` — settings and sessions only | — no usage command, no local quota record |
+| kiro | `KIRO_HOME=<dir>` — settings and sessions only | credits metered per turn in its own session files |
 
 Kiro is a partial fit and oms says so rather than pretending. `KIRO_HOME` moves its
 settings and sessions, but not its login: the credential is a single machine-wide
 keychain entry, and a brand new `KIRO_HOME` still reports the account already signed in.
 So Kiro holds **one login at a time** — registering a second Kiro account warns that
-logging into it signs the other out. It also exposes no usage command and writes no
-local quota record, so `oms status` says the provider reports no usage instead of
-showing the account as merely unused, and `oms auto` skips it because there is nothing
-to choose on.
+logging into it signs the other out.
+
+Kiro has no usage command either, but it does record what each turn cost, in credits, in
+its own session files. `oms` sums those for the current billing period, so it needs the
+plan's allowance and reset day, which only you know:
+
+```bash
+oms set kiro size=1000 resets_on=1
+```
+
+That counts CLI turns made through this profile. Anything you spend in the Kiro IDE or
+on the web is invisible to it, so read the figure as a floor, not a total.
 
 A provider you have not installed is still a provider. `oms login kiro` offers to
 install the CLI first and then logs you in:

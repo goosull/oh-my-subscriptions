@@ -129,6 +129,57 @@ def _win(mins):
     return f"{h}h" if h < 48 else f"{h // 24}d"
 
 
+# --- usage: kiro --------------------------------------------------------------
+# kiro-cli records what each turn cost in its own session files, under
+# session_state.conversation_metadata.user_turn_metadatas[].metering_usage, as credits.
+# That is consumption, not a balance, so the plan's allowance has to be declared with
+# `oms set <account> size=N` before a percentage means anything.
+
+def kiro_usage(acct):
+    size = acct.get("size")
+    if not size:
+        return {"err": "set size=<plan credits> to track"}
+    start = _period_start(acct.get("resets_on", 1))
+    used, seen = 0.0, False
+    for f in (Path(acct["dir"]) / "sessions").rglob("*.json"):
+        try:
+            d = json.loads(f.read_text(errors="ignore"))
+        except ValueError:
+            continue
+        if (d.get("updated_at") or "") < start:
+            continue
+        for t in ((d.get("session_state") or {}).get("conversation_metadata")
+                  or {}).get("user_turn_metadatas") or []:
+            for m in t.get("metering_usage") or []:
+                if m.get("unit") == "credit":
+                    used += float(m.get("value") or 0)
+                    seen = True
+    if not seen:
+        return {"err": "no metered turns yet"}
+    pct = min(100.0, used / float(size) * 100)
+    return {"plan": "-", "pct": pct, "resets": _period_end(acct.get("resets_on", 1)),
+            "short_pct": None, "window": "30d", "windows": [("30d", pct)],
+            "age": 0, "paid_on": bool(acct.get("paid_overflow", False)),
+            "detail": f"30d {pct:.0f}%  ({used:.1f}/{size:g} credits)"}
+
+
+def _period_start(day):
+    """ISO timestamp of the current monthly period's first day, in UTC."""
+    import datetime as dt
+    now = dt.datetime.now(dt.timezone.utc)
+    first = now.replace(day=min(day, 28), hour=0, minute=0, second=0, microsecond=0)
+    if first > now:
+        first = (first.replace(day=1) - dt.timedelta(days=1)).replace(day=min(day, 28))
+    return first.isoformat().replace("+00:00", "Z")
+
+
+def _period_end(day):
+    import datetime as dt
+    start = dt.datetime.fromisoformat(_period_start(day).replace("Z", "+00:00"))
+    nxt = (start.replace(day=28) + dt.timedelta(days=7)).replace(day=min(day, 28))
+    return nxt.timestamp()
+
+
 # --- providers ----------------------------------------------------------------
 # Everything provider-specific lives here, so adding one is a table entry rather than
 # a hunt through the file. A provider that is not installed is still a provider: oms
@@ -141,6 +192,7 @@ PROVIDERS = {
         "install": [("npm", ["npm", "install", "-g", "@anthropic-ai/claude-code"])],
         "login": None,  # there is no login subcommand; you run /login inside a session
         "launch": [],
+        "prime": ["-p", "ok"],
         "usage": lambda a: claude_usage(a),
         "shared_auth": False,
         "flags": {"model": lambda v: ["--model", v],
@@ -153,6 +205,7 @@ PROVIDERS = {
         "install": [("npm", ["npm", "install", "-g", "@openai/codex"])],
         "login": ["login"],
         "launch": [],
+        "prime": ["exec", "ok"],
         "usage": lambda a: codex_usage(a),
         "shared_auth": False,
         "flags": {"model": lambda v: ["-m", v],
@@ -167,13 +220,13 @@ PROVIDERS = {
                     ("curl", ["bash", "-c", "curl -fsSL https://cli.kiro.dev/install | bash"])],
         "login": ["login"],
         "launch": ["chat"],
+        # appended after `launch`, so this must not repeat the `chat` subcommand
+        "prime": ["--no-interactive", "--trust-all-tools", "ok"],
         # KIRO_HOME moves settings and sessions but not the login: the credential is a
         # single machine-wide keychain entry (kirocli:social:token), and a brand new
         # KIRO_HOME still reports the existing account. So one Kiro login at a time.
         "shared_auth": True,
-        # No usage command and no local quota record either, so oms can launch a Kiro
-        # account but cannot report what it has left.
-        "usage": None,
+        "usage": lambda a: kiro_usage(a),
         "flags": {},
         "efforts": [],
     },
@@ -438,6 +491,7 @@ GLOBAL_KEYS = {
 ACCOUNT_KEYS = {
     "name": "what the account is called",
     "size": "how big this plan's pool is, any comparable number; smaller is spent first",
+    "resets_on": "day of month the plan's credits reset (kiro)",
     "model": "model to launch with, in that vendor's own model names",
     "effort": "reasoning effort: low, medium, high, xhigh, max (codex also minimal)",
     "context": "context window in tokens (codex only; claude takes it from the model)",
@@ -459,6 +513,10 @@ def _coerce(key, val):
     if key == "context":
         if not val.isdigit():
             die(f"context takes a number of tokens, got {val!r}")
+        return int(val)
+    if key == "resets_on":
+        if not val.isdigit() or not 1 <= int(val) <= 28:
+            die(f"resets_on takes a day of the month, 1-28; got {val!r}")
         return int(val)
     if key == "size":
         if not val:
@@ -850,9 +908,11 @@ def cmd_install(cfg, args):
 def cmd_login(cfg, args):
     """Log in to a new account first, name it after. `oms login codex`"""
     allow = "--no-install" not in args
-    args = [a for a in args if a != "--no-install"]
+    do_prime = "--no-prime" not in args
+    args = [a for a in args if a not in ("--no-install", "--no-prime")]
     if not args or args[0] not in PROVIDERS:
-        die(f"usage: oms login <{'|'.join(PROVIDERS)}> [<name>] [--no-install]")
+        die(f"usage: oms login <{'|'.join(PROVIDERS)}> [<name>]"
+            " [--no-install] [--no-prime]")
     vendor = args[0]
     want = args[1] if len(args) > 1 else None
     existing = next((a for a in cfg["accounts"] if a["name"] == want), None)
@@ -881,6 +941,7 @@ def cmd_login(cfg, args):
         die(f"login failed; nothing registered. profile left at {tmp}")
     if existing:
         print(f"logged in as {existing['name']}")
+        prime(existing, do_prime)
         return
     taken = {a["name"] for a in cfg["accounts"]}
     default = want or next(f"{vendor}-{i}" for i in range(2, 99) if f"{vendor}-{i}" not in taken)
@@ -907,6 +968,7 @@ def cmd_login(cfg, args):
     cfg["accounts"].append(acct)
     save(cfg)
     print(f"registered {name} -> {dest}")
+    prime(acct, do_prime)
     if vendor == "claude":
         print("set 'paid_overflow': false in ~/.oms/config.json if this plan has no credit attached")
 
@@ -930,6 +992,28 @@ def cmd_rename(cfg, args):
     a["name"] = new
     save(cfg)
     print(f"{old} -> {new}")
+
+
+def prime(acct, run=True):
+    """Spend one trivial turn so the account reports usage straight away.
+
+    Every provider only records usage once it has actually done something, so a freshly
+    registered account reads "no data yet" and `oms auto` skips it until you happen to
+    use it. One turn costs a rounding error and makes it visible immediately.
+    """
+    cmd = provider(acct).get("prime")
+    if not run or not cmd:
+        return
+    print(f"priming {acct['name']} with one turn so it reports usage...", flush=True)
+    b = provider(acct)["bin"]
+    r = subprocess.run([b, *launch_flags(acct), *cmd], env=env_for(acct),
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        print(f"  could not prime ({(r.stderr or '').strip()[:80]}) - it will fill in "
+              f"the first time you use the account", file=sys.stderr)
+        return
+    u = usage(acct)
+    print(f"  {acct['name']}: {u['detail'] if not u.get('err') else u['err']}")
 
 
 def cmd_remove(cfg, args):
@@ -1012,7 +1096,7 @@ def selftest():
         "a setting the provider has no flag for must not leak into its argv"
     assert launch_flags({"vendor": "codex", "model": "m", "args": ["--raw"]})[-1] == "--raw"
     assert launch_flags({"vendor": "kiro"})[0] == "chat", "a provider may need a subcommand"
-    assert all({"bin", "home", "install", "launch", "usage", "flags", "efforts",
+    assert all({"bin", "home", "install", "launch", "prime", "usage", "flags", "efforts",
                 "shared_auth"} <= set(v)
                for v in PROVIDERS.values()), "every provider must fill the whole table"
     assert all(isinstance(c, list) and c for v in PROVIDERS.values() for _, c in v["install"]), \
@@ -1045,7 +1129,7 @@ CMDS = {"status": cmd_status, "add": cmd_add, "run": cmd_run, "auto": cmd_auto,
         "handoff": cmd_handoff, "check": cmd_check,
         "statusline": cmd_statusline, "install": cmd_install, "env": cmd_env}
 USAGE_TEXT = __doc__ + """
-  oms login <provider> [<name>]        install if missing, log in, name it
+  oms login <provider> [<name>]        install if missing, log in, name, prime it
   oms remove <name> [--purge]          unregister an account
   oms add <name> <provider> [--dir PATH] [--paid-overflow yes|no]
   oms install                          wire usage recording into ~/.claude/settings.json
