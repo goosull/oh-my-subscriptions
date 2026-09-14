@@ -377,6 +377,27 @@ def cmd_login(cfg, args):
         print("set 'paid_overflow': false in ~/.oms/config.json if this plan has no credit attached")
 
 
+def cmd_rename(cfg, args):
+    """Rename an account, carrying its recorded usage with it."""
+    if len(args) != 2:
+        die("usage: oms rename <old> <new>")
+    old, new = args
+    a = find(cfg, old)
+    if any(x["name"] == new for x in cfg["accounts"]):
+        die(f"'{new}' is already registered")
+    for suffix in (".json", ".codex-cache.json"):
+        src = USAGE / f"{old}{suffix}"
+        if src.exists():
+            src.rename(USAGE / f"{new}{suffix}")
+    d = Path(a["dir"])
+    if d.parent == OMS / "accounts" and d.name == old:  # a profile oms created
+        d.rename(d.parent / new)
+        a["dir"] = str(d.parent / new)
+    a["name"] = new
+    save(cfg)
+    print(f"{old} -> {new}")
+
+
 def cmd_env(cfg, args):
     a = find(cfg, args[0])
     print(f'export {"CLAUDE_CONFIG_DIR" if a["vendor"] == "claude" else "CODEX_HOME"}="{a["dir"]}"')
@@ -396,8 +417,8 @@ def selftest():
 
 
 CMDS = {"status": cmd_status, "add": cmd_add, "run": cmd_run, "auto": cmd_auto,
-        "login": cmd_login, "statusline": cmd_statusline, "install": cmd_install,
-        "env": cmd_env}
+        "login": cmd_login, "rename": cmd_rename, "statusline": cmd_statusline,
+        "install": cmd_install, "env": cmd_env}
 USAGE_TEXT = __doc__ + """
   oms login <claude|codex>             log in to a new account, then name it
   oms add <name> <claude|codex> [--dir PATH] [--paid-overflow yes|no]
@@ -405,6 +426,7 @@ USAGE_TEXT = __doc__ + """
   oms status                           what every account has left
   oms run [--force] <name> [args...]   launch one account
   oms auto <claude|codex> [args...]    launch the freest account that can't bill you
+  oms rename <old> <new>               rename an account, keeping its usage history
   oms env <name>                       print the export line for a shell
 """
 

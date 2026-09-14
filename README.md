@@ -52,8 +52,8 @@ oms install                                  # wires usage recording into settin
 ```
 
 `oms login` logs in to a scratch profile and only asks what to call the account once
-the login succeeds, so you never name an account you failed to log in to. To rename one
-later, edit its `name` in `~/.oms/config.json`.
+the login succeeds, so you never name an account you failed to log in to. Got the name
+wrong anyway? `oms rename <old> <new>` moves its recorded usage along with it.
 
 `oms install` sets `statusLine` in `~/.claude/settings.json`, chaining whatever status
 line you already had. Restart Claude Code and the numbers start filling in.
@@ -119,6 +119,7 @@ oms install                          wire usage recording into ~/.claude/setting
 oms status                           what every account has left
 oms run [--force] <name> [args...]   launch one account
 oms auto <claude|codex> [args...]    launch the freest account that can't bill you
+oms rename <old> <new>               rename an account, keeping its usage history
 oms env <name>                       print the export line for a shell
 ```
 
