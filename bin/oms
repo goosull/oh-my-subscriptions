@@ -618,8 +618,12 @@ def _best_alt(cfg, acct):
              if not v.get("err") and not blocked(b, v, cfg["block_at"])]
     if not cands:
         return "No other account has known headroom."
-    _, b, v = min(cands, key=lambda t: t[0])
-    return f"`oms run {b['name']} --handoff` has room ({v['pct']:.0f}% used)."
+    # the warning exists because this account can charge, so lead with one that cannot;
+    # suggesting another billable plan moves the risk rather than leaving it
+    free = [c for c in cands if not c[2]["paid_on"]]
+    _, b, v = min(free or cands, key=lambda t: t[0])
+    safe = "" if free else " — it can bill too, so watch it"
+    return f"`oms run {b['name']} --handoff` has room ({v['pct']:.0f}% used){safe}."
 
 
 # One vocabulary, translated per vendor at launch. The point of oms is that you say
@@ -1358,6 +1362,14 @@ def _guard_holds():
 
         cmd_run(cfg, ["risky"], check=False)
         assert launched, "--force must still launch"
+
+        # the handoff a warning suggests must not be another account that can charge
+        readings["risky"] = reading([("7d", 90)], paid_on=True)
+        billable = {"name": "other-billable", "vendor": "codex", "dir": "/tmp",
+                    "paid_overflow": True}
+        readings["other-billable"] = reading([("7d", 1)], paid_on=True)
+        alt = _best_alt({"accounts": [at_risk, billable, safe], "block_at": 95}, at_risk)
+        assert "safe" in alt, f"a warning must flee to a plan that cannot charge, not {alt}"
 
         launched.clear()
         quiet, sys.stderr = sys.stderr, open(os.devnull, "w")
