@@ -486,10 +486,27 @@ def _ago(sec):
 
 # --- policy -------------------------------------------------------------------
 
+def stale(u):
+    """Has this reading aged enough that the window could have moved under it?
+
+    A quarter of the window it describes: 75 minutes for a 5-hour window, a day and a
+    half for a weekly one. Past that the number is history, and a guard reasoning from
+    history is not a guard - a claude account read before the last session could be
+    anywhere by now.
+    """
+    wins = u.get("windows") or []
+    if u.get("err") or not wins:
+        return False
+    soonest = min(_mins(l) for l, _ in wins)
+    return (u.get("age") or 0) > soonest * 60 / 4
+
+
 def blocked(acct, u, block_at):
     """Could running this account bill you? -> reason or None."""
     if u.get("err"):
         return u["err"]
+    if stale(u) and u["paid_on"]:
+        return f"last read {_ago(u['age'])} ago, too old to vouch for on a billable plan"
     if not u["paid_on"]:
         return None  # plan-only: it stops at the ceiling instead of charging
     if u["pct"] >= acct.get("block_at", block_at):
@@ -512,7 +529,8 @@ def cmd_status(cfg, args):
         b = blocked(a, u, cfg["block_at"])
         blocked_any = blocked_any or bool(b)
         rows.append([a["name"], a["vendor"], (u["plan"] or "-")[:8], u["detail"],
-                     _until(u["resets"]), _pace_text(pace(a, u)), _ago(u.get("age")),
+                     _until(u["resets"]), _pace_text(pace(a, u)),
+                     _ago(u.get("age")) + (" stale" if stale(u) else ""),
                      ("BLOCKED" if b else "at risk") if u["paid_on"] else "no"])
     head = ["ACCOUNT", "VENDOR", "PLAN", "USED", "RESETS", "ON PACE FOR", "AS OF", "BILLS?"]
     # widths come from the data; a long reading must not shove every later column right
@@ -545,7 +563,8 @@ def _status_json(cfg):
             row.update(available=False, reason=u["err"])
         else:
             b = blocked(a, u, cfg["block_at"])
-            row.update(available=not b, blocked=b, plan=u.get("plan"),
+            row.update(available=not b and not stale(u), blocked=b, stale=stale(u),
+                       plan=u.get("plan"),
                        used_percent=u["pct"],
                        # named, so a consumer never has to work out which is which -
                        # the mistake this file kept making internally
@@ -714,7 +733,7 @@ def _due(acct, pct):
 def _best_alt(cfg, acct):
     others = [b for b in cfg["accounts"] if b["name"] != acct["name"]]
     cands = [(sel_key(cfg, b, v), b, v) for b, v in zip(others, usage_all(others))
-             if not v.get("err") and not blocked(b, v, cfg["block_at"])]
+             if not v.get("err") and not stale(v) and not blocked(b, v, cfg["block_at"])]
     if not cands:
         return "No other account has known headroom."
     # Follow the pick order rather than second-guessing it. Billing risk is already
@@ -958,7 +977,8 @@ def cmd_auto(cfg, args):
         vendor, rest = have[0], args
     mine = [a for a in cfg["accounts"] if a["vendor"] == vendor]
     cands = [(sel_key(cfg, a, u), a, u) for a, u in zip(mine, usage_all(mine))
-             if not u.get("err") and not blocked(a, u, cfg["block_at"])]
+             # a stale reading is not evidence; auto must not pick on it
+             if not u.get("err") and not stale(u) and not blocked(a, u, cfg["block_at"])]
     if not cands:
         die(f"no {vendor} account is both known-good and unblocked. run 'oms status'")
     _, best, bu = min(cands, key=lambda t: t[0])
@@ -1370,7 +1390,13 @@ def selftest():
     assert blocked(a, {"pct": 99, "paid_on": True}, 95), "must block possible overage"
     assert blocked(a, {"pct": 50, "paid_on": True}, 95) is None
     assert blocked({"name": "x", "block_at": 40}, {"pct": 50, "paid_on": True}, 95), "per-account limit"
-    assert blocked(a, {"err": "nope"}, 95) == "nope", "status still surfaces unknown as a reason"
+    assert blocked(a, {"err": "nope"}, 95) == "nope", "unknown surfaces as a reason"
+    # a reading old enough that the window could have moved is not evidence of anything
+    fresh = reading([("5h", 30)], paid_on=True, age=60)
+    old = reading([("5h", 30)], paid_on=True, age=3 * 86400)
+    assert not stale(fresh) and stale(old)
+    assert not blocked(a, fresh, 95) and blocked(a, old, 95), "a guard cannot vouch for history"
+    assert not stale(reading([("30d", 30)], age=3 * 86400)), "three days is young for a month"
     assert _win(10080) == "7d" and _win(300) == "5h" and _win(None) == "?"
     assert _until(time.time() + 7260).startswith("2h") and _until(0) == "-"
     assert _until(time.time() - 5) == "now"

@@ -27,6 +27,14 @@ quota you are not going to get to spend; over means you run out before it resets
 stays `-` until there are two readings far enough apart in the same window to draw a
 line through — a projection from one sample is a guess with a decimal point on it.
 
+`AS OF` says how old the reading is, and `stale` next to it means old enough that the
+window could have moved underneath — a quarter of the window it describes, so 75 minutes
+for a 5-hour one and a day and a half for a weekly one. A stale reading is not treated
+as a small number; it is treated as no number. `oms auto` will not pick on one, and the
+guard refuses a billable account rather than vouch for history. This is the state a
+Claude account drifts into once you stop opening Claude Code, since that is the only
+place its figure comes from.
+
 `BILLS?` is what happens when a plan reaches its ceiling: `no` means it stops and costs
 nothing, `at risk` means paid overflow is on so the ceiling is a charge, and `BLOCKED`
 means `oms` will not launch it.
