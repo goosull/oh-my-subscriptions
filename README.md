@@ -32,8 +32,9 @@ a plan with no credit attached can sit at 99% without turning red, because it st
 rather than charges. The bar is drawn with a filled `━` and a lighter `─`, so it still
 reads on a terminal with no colour.
 
-Install as a Claude Code plugin and `/oh-my-subscriptions:status` also answers "which
-account should I use?" in the middle of a session.
+Installed as a Claude Code plugin, two skills keep it out of the terminal:
+`/oh-my-subscriptions:status` answers "which account should I use?" mid-session, and
+`/oh-my-subscriptions:priority` shows or changes the order without you remembering flags.
 
 ## Install
 
@@ -81,6 +82,26 @@ and `oms` does not try to invent one.
 
 Switching also happens at launch, not mid-session: a running CLI holds its own session.
 `oms status` tells you when it's worth restarting somewhere else.
+
+## Which account gets used first
+
+A 5-hour window refills four or five times a day, so quota still sitting in it when the
+window resets is gone — it cannot be banked. A weekly-only pool is a fixed budget worth
+the same whenever it is spent. So `oms auto` drains short windows first and keeps
+weekly-only accounts in reserve, preferring the most headroom within each group.
+
+```
+$ oms priority
+priority: automatic - short windows first, then most headroom
+
+  codex 1. codex-a         5h at 0%, expires on reset
+  codex 2. codex-b         weekly pool, 51% used
+```
+
+Override it with an explicit order, `oms priority codex-b codex-a`, and go back with
+`oms priority --auto`. Accounts you leave out still get used, just after every listed
+one. Priority is only about order — an account that could bill you is skipped by the
+guard below no matter where it sits.
 
 ## The paid-credit guard
 

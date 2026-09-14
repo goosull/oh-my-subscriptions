@@ -11,6 +11,8 @@ Then, in one or two lines, say which account to use next and why. The rules:
 - `AS OF` is staleness. A figure hours old is a hint, not a fact: usage only updates when that account is actually used.
 - `! no data yet` means that account has never run under oms, not that it is empty.
 
+To change which account `oms auto` reaches for first, use the `priority` skill.
+
 To start work on a specific account the user must launch it themselves, because switching
 accounts means starting a new session. Give them the exact line, do not try to run it:
 

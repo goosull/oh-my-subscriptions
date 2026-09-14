@@ -54,6 +54,7 @@ def claude_usage(acct):
     pct = max(fh.get("used_percentage") or 0, sd.get("used_percentage") or 0)
     hot = fh if (fh.get("used_percentage") or 0) >= (sd.get("used_percentage") or 0) else sd
     return {"plan": "-", "pct": pct, "resets": hot.get("resets_at"),
+            "short_pct": fh.get("used_percentage") if fh else None,
             "age": time.time() - d.get("at", 0),
             "paid_on": bool(acct.get("paid_overflow", True)),
             "detail": f"5h {fh.get('used_percentage', 0):.0f}% / 7d {sd.get('used_percentage', 0):.0f}%"}
@@ -63,16 +64,22 @@ def claude_usage(acct):
 # The codex CLI writes rate_limits into its own session rollout files. Read the
 # newest one in this profile; no network, no token.
 
+# Bump whenever the shape of a usage dict changes, so a cache written by an older
+# build is discarded instead of quietly serving a record with fields missing.
+CACHE_V = 2
+
+
 def codex_usage(acct):
     c = USAGE / f"{acct['name']}.codex-cache.json"
     if c.exists() and time.time() - c.stat().st_mtime < 60:
         d = json.loads(c.read_text())
-        d["age"] = time.time() - d.pop("at", time.time())
-        return d
+        if d.pop("v", 0) == CACHE_V:
+            d["age"] = time.time() - d.pop("at", time.time())
+            return d
     u = _codex_scan(acct)
     if not u.get("err"):
         USAGE.mkdir(parents=True, exist_ok=True)
-        c.write_text(json.dumps({**u, "at": time.time() - u["age"]}))
+        c.write_text(json.dumps({**u, "at": time.time() - u["age"], "v": CACHE_V}))
     return u
 
 
@@ -93,7 +100,10 @@ def _codex_scan(acct):
         cr = rl.get("credits") or {}
         pct = max(pw.get("used_percent") or 0, sw.get("used_percent") or 0)
         hot = pw if (pw.get("used_percent") or 0) >= (sw.get("used_percent") or 0) else sw
+        short = next((w.get("used_percent") for w in (pw, sw)
+                      if w and (w.get("window_minutes") or 10**9) <= 360), None)
         return {"plan": rl.get("plan_type", "?"), "pct": pct, "resets": hot.get("resets_at"),
+                "short_pct": short,
                 "age": time.time() - f.stat().st_mtime,
                 "paid_on": bool(cr.get("has_credits")) or float(cr.get("balance") or 0) > 0,
                 "detail": _cdetail(pw, sw)}
@@ -211,23 +221,71 @@ def cmd_run(cfg, args, check=True):
     os.execvpe(a["vendor"], [a["vendor"], *args[1:]], env_for(a))
 
 
+def rank(u):
+    """Sort key for auto-selection.
+
+    A 5-hour window refills four or five times a day, so quota left sitting in it when
+    it resets is simply gone. A weekly-only pool is a fixed budget that is worth the
+    same whenever it is spent. So drain the short windows first and keep the weekly
+    pool in reserve. Within each group, whoever has the most room goes first.
+    """
+    if u.get("short_pct") is not None:
+        return (0, u["short_pct"])
+    return (1, u["pct"])
+
+
+def cmd_priority(cfg, args):
+    """Show or set an explicit account order for `oms auto`."""
+    if args and args[0] in ("--auto", "auto", "reset"):
+        cfg.pop("priority", None)
+        save(cfg)
+        print("priority: automatic (short windows first, then most headroom)")
+        return
+    if args:
+        for n in args:
+            find(cfg, n)
+        cfg["priority"] = list(args)
+        save(cfg)
+    order = cfg.get("priority")
+    if not order:
+        print("priority: automatic - short windows first, then most headroom\n")
+        for v in ("claude", "codex"):
+            ranked = []
+            for a in cfg["accounts"]:
+                if a["vendor"] != v:
+                    continue
+                u = usage(a)
+                if u.get("err"):
+                    continue
+                ranked.append((rank(u), a["name"], u))
+            for i, (_, n, u) in enumerate(sorted(ranked), 1):
+                why = (f"5h at {u['short_pct']:.0f}%, expires on reset"
+                       if u.get("short_pct") is not None else f"weekly pool, {u['pct']:.0f}% used")
+                print(f"  {v} {i}. {n:<14} {why}")
+        return
+    print("priority: explicit\n  " + "\n  ".join(f"{i}. {n}" for i, n in enumerate(order, 1)))
+    print("\n  'oms priority --auto' to go back to the automatic rule")
+
+
 def cmd_auto(cfg, args):
     vendor = args[0] if args and args[0] in ("claude", "codex") else "claude"
     rest = args[1:] if args and args[0] in ("claude", "codex") else args
-    best, bp = None, None
+    order = cfg.get("priority") or []
+    cands = []
     for a in cfg["accounts"]:
         if a["vendor"] != vendor:
             continue
         u = usage(a)
-        if u.get("err"):
+        if u.get("err") or blocked(a, u, cfg["block_at"]):
             continue
-        if blocked(a, u, cfg["block_at"]):
-            continue
-        if best is None or u["pct"] < bp:
-            best, bp = a, u["pct"]
-    if not best:
+        key = (order.index(a["name"]),) if a["name"] in order else rank(u)
+        cands.append(((a["name"] not in order, key), a, u))
+    if not cands:
         die(f"no {vendor} account is both known-good and unblocked. run 'oms status'")
-    print(f"oms: {best['name']} ({bp:.0f}% used)", file=sys.stderr)
+    _, best, bu = min(cands, key=lambda t: t[0])
+    why = (f"5h {bu['short_pct']:.0f}%" if bu.get("short_pct") is not None
+           else f"weekly {bu['pct']:.0f}%")
+    print(f"oms: {best['name']} ({why})", file=sys.stderr)
     os.execvpe(vendor, [vendor, *rest], env_for(best))
 
 
@@ -419,12 +477,16 @@ def selftest():
     assert _win(10080) == "7d" and _win(300) == "5h" and _win(None) == "?"
     assert _until(time.time() + 7260).startswith("2h") and _until(0) == "-"
     assert _until(time.time() - 5) == "now"
+    # a short window that resets today outranks any weekly-only pool, however empty
+    assert rank({"short_pct": 90, "pct": 90}) < rank({"short_pct": None, "pct": 0})
+    assert rank({"short_pct": 10, "pct": 99}) < rank({"short_pct": 80, "pct": 5})
+    assert rank({"short_pct": None, "pct": 20}) < rank({"short_pct": None, "pct": 70})
     print("ok")
 
 
 CMDS = {"status": cmd_status, "add": cmd_add, "run": cmd_run, "auto": cmd_auto,
-        "login": cmd_login, "rename": cmd_rename, "statusline": cmd_statusline,
-        "install": cmd_install, "env": cmd_env}
+        "login": cmd_login, "rename": cmd_rename, "priority": cmd_priority,
+        "statusline": cmd_statusline, "install": cmd_install, "env": cmd_env}
 USAGE_TEXT = __doc__ + """
   oms login <claude|codex>             log in to a new account, then name it
   oms add <name> <claude|codex> [--dir PATH] [--paid-overflow yes|no]
@@ -433,6 +495,7 @@ USAGE_TEXT = __doc__ + """
   oms run [--force] <name> [args...]   launch one account
   oms auto <claude|codex> [args...]    launch the freest account that can't bill you
   oms rename <old> <new>               rename an account, keeping its usage history
+  oms priority [<name>... | --auto]    show or set the order `oms auto` picks in
   oms env <name>                       print the export line for a shell
 """
 
