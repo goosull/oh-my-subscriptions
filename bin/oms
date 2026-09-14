@@ -188,8 +188,11 @@ def cmd_run(cfg, args, check=True):
         die("usage: oms run [--force] <account> [cli args...]")
     a = find(cfg, args[0])
     if check:
-        b = blocked(a, usage(a), cfg["block_at"])
-        if b and not b.startswith("no data"):
+        u = usage(a)
+        if u.get("err"):
+            # unknown usage is not evidence of risk, and every fresh profile starts here
+            print(f"oms: {a['name']} usage unknown ({u['err']})", file=sys.stderr)
+        elif (b := blocked(a, u, cfg["block_at"])):
             die(f"{a['name']} blocked: {b}\n     'oms run --force {a['name']}' to override, "
                 f"or 'oms auto {a['vendor']}' to pick another")
     os.execvpe(a["vendor"], [a["vendor"], *args[1:]], env_for(a))
@@ -276,7 +279,7 @@ def selftest():
     assert blocked(a, {"pct": 99, "paid_on": True}, 95), "must block possible overage"
     assert blocked(a, {"pct": 50, "paid_on": True}, 95) is None
     assert blocked({"name": "x", "block_at": 40}, {"pct": 50, "paid_on": True}, 95), "per-account limit"
-    assert blocked(a, {"err": "nope"}, 95) == "nope"
+    assert blocked(a, {"err": "nope"}, 95) == "nope", "status still surfaces unknown as a reason"
     assert _win(10080) == "7d" and _win(300) == "5h" and _win(None) == "?"
     assert _until(time.time() + 7260).startswith("2h") and _until(0) == "-"
     assert _until(time.time() - 5) == "now"
