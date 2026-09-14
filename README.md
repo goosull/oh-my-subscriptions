@@ -24,10 +24,10 @@ With the status line installed, every account stays visible while you work — t
 you're in with both its windows, the rest with their hottest one:
 
 ```
-Opus 5  high  ctx ▰▰▰▰▰▰▰▱▱▱ 68% left of 1M
-▸ claude-main  ▰▰▰▱▱▱▱▱  34% ▰▰▰▰▰▰▰▱  88%
-  claude-alt   ▰▱▱▱▱▱▱▱  12% ▰▰▱▱▱▱▱▱  31%
-! codex-main   ▰▰▰▰▰▰▰▰  97% ▰▰▰▱▱▱▱▱  40%
+Opus 5  high  ctx ▬▬▬▬▬▬▬─── 68% left of 1M
+▸ claude-main  ▬▬▬─────  34% ▬▬▬▬▬▬▬─  88%
+  claude-alt   ▬───────  12% ▬▬──────  31%
+! codex-main   ▬▬▬▬▬▬▬▬  97% ▬▬▬─────  40%
 ```
 
 One account per row, one column per window, shortest first — so the column a meter

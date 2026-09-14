@@ -435,9 +435,9 @@ def _tone(pct, is_blocked):
 
 
 def _bar(pct, width, colour):
-    """Filled run in colour against an outline, so it reads without colour too."""
+    """Heavy filled run against a light rule, so the bar reads without colour too."""
     filled = max(0, min(width, round(pct / 100 * width)))
-    return f"{colour}{'▰' * filled}{RESET}{DIM}{'▱' * (width - filled)}{RESET}"
+    return f"{colour}{'▬' * filled}{RESET}{DIM}{'─' * (width - filled)}{RESET}"
 
 
 def _meter(pct, blocked_, width=BAR):
