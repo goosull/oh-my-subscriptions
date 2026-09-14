@@ -48,10 +48,43 @@ export interface Ask {
 /** The decision this whole project is about. */
 export type Router = (ask: Ask) => Engine | Promise<Engine>;
 
+/** What one request actually put on the wire, and how much of it was already sent once. */
+export interface Sent {
+  /** Characters of transcript in this request. */
+  size: number;
+  /** Of those, characters this engine had never seen, so no cache could have covered them. */
+  cold: number;
+  /** True when the previous request went to a different engine. */
+  switched: boolean;
+}
+
 export type Event =
   | { at: "turn_start" }
-  | { at: "routed"; engine: Engine; step: number }
+  | { at: "routed"; engine: Engine; step: number; sent: Sent }
   | { at: "text"; chunk: string }
   | { at: "call"; call: Call }
   | { at: "result"; callId: string; result: string; failed?: boolean }
-  | { at: "turn_end"; transcript: readonly Entry[] };
+  | { at: "turn_end"; transcript: readonly Entry[]; cost: Cost };
+
+/**
+ * How much of the transcript each engine has already been shown, and what routing has
+ * cost so far. A provider's prompt cache outlives a single turn, so this has to be held
+ * by whoever owns the conversation — kept inside one turn it would forget between them
+ * and report every turn as a fresh switch.
+ */
+export interface Ledger {
+  seen: Map<string, number>;
+  cost: Cost;
+}
+
+export const ledger = (): Ledger => ({ seen: new Map(), cost: { sent: 0, resent: 0, switches: 0 } });
+
+/** What routing cost. */
+export interface Cost {
+  /** Characters sent across every request this turn. */
+  sent: number;
+  /** Of those, characters resent only because a request went to an engine that had not
+   *  seen them. Staying on one engine makes this zero. */
+  resent: number;
+  switches: number;
+}

@@ -74,9 +74,16 @@ for await (const ev of run(loop as any, transcript, "what kernel is this?")) {
   if (ev.at === "routed") {
     const a = spendable.find(x => x.name === ev.engine.account);
     const note = a ? `${a.used_percent?.toFixed(0)}% used, ${a.pays_on_overflow ? "can bill" : "cannot bill"}` : "no account";
-    console.log(`  step ${ev.step}  ${ev.engine.id.padEnd(8)} -> ${(ev.engine.account ?? "-").padEnd(12)} (${note})`);
+    const cold = ev.sent.switched ? `  cold ${ev.sent.cold} ch` : "";
+    console.log(`  step ${ev.step}  ${ev.engine.id.padEnd(8)} -> ${(ev.engine.account ?? "-").padEnd(12)} (${note})${cold}`);
   }
   if (ev.at === "call") console.log(`            ${ev.call.tool}(${JSON.stringify(ev.call.input)})`);
   if (ev.at === "result") console.log(`            => ${ev.result}`);
   if (ev.at === "text") console.log(`            "${ev.chunk}"`);
+  if (ev.at === "turn_end") {
+    const { sent, resent, switches } = ev.cost;
+    const pct = sent ? ((resent / sent) * 100).toFixed(0) : "0";
+    console.log(`\n  ${switches} switch(es). ${sent} characters sent, ${resent} of them (${pct}%) ` +
+      `only because an engine had not seen them before.`);
+  }
 }

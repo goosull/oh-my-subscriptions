@@ -52,10 +52,36 @@ nothing to do with this idea and would never be worth repeating. It is behind `w
 and nothing above that line knows it is there. `pi-agent-core` was dropped once the loop
 existed; the dependency list is one package.
 
-## Not yet true
+## What a switch costs
 
-The demo drives mock engines, so it says nothing about what a real handover costs. Two
-things only real providers can answer: whether tool-call ids, thinking signatures and
-cache breakpoints survive being handed to another provider, and what re-sending a cold
-prompt costs when the new engine has no warm cache. If routing burns more in re-sent
-tokens than it saves, the idea needs a cheaper seam — that measurement comes first.
+A provider's prompt cache is its own. Routing a request to an engine that has not seen
+the transcript means re-sending all of it at full price, so a switch does not cost a
+fixed amount — it costs whatever the conversation weighs at that moment. `cost.ts`
+measures it:
+
+```
+  turns  switch at  resent chars  share of everything sent
+      4          1          4225   20%
+      4          3          8503   40%
+     16          1          4225    1%
+     16         15         34183   12%
+```
+
+Switching at the first turn costs the same whether the conversation runs to four turns
+or sixteen. Switching at the fifteenth costs eight times as much, because by then there
+is eight times as much history to re-send cold.
+
+So the rule the router should follow is **early, not often**. Picking the right engine
+before a conversation has accumulated anything is nearly free; changing your mind late
+pays for the whole history. A design that swaps engines every other request would spend
+more re-sending context than it saves on the cheaper model.
+
+The loop keeps this count itself — `Ledger` tracks how much each engine has been shown
+and every turn ends with what routing cost — so the question is answerable on real
+traffic rather than argued about.
+
+## Still not measured
+
+Whether tool-call ids, thinking signatures and cache breakpoints survive being handed to
+another provider. Only real providers can answer that, and it decides whether a mid-turn
+handover is merely expensive or outright impossible for some pairs.
