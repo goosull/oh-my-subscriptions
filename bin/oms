@@ -64,6 +64,19 @@ def claude_usage(acct):
 # newest one in this profile; no network, no token.
 
 def codex_usage(acct):
+    c = USAGE / f"{acct['name']}.codex-cache.json"
+    if c.exists() and time.time() - c.stat().st_mtime < 60:
+        d = json.loads(c.read_text())
+        d["age"] = time.time() - d.pop("at", time.time())
+        return d
+    u = _codex_scan(acct)
+    if not u.get("err"):
+        USAGE.mkdir(parents=True, exist_ok=True)
+        c.write_text(json.dumps({**u, "at": time.time() - u["age"]}))
+    return u
+
+
+def _codex_scan(acct):
     sess = Path(acct["dir"]) / "sessions"
     if not sess.is_dir():
         return {"err": "no data yet - run this account once"}
@@ -243,11 +256,23 @@ def cmd_statusline(cfg, args):
         sys.stdout.write(p.stdout)
         return
     rl = d.get("rate_limits") or {}
-    parts = [f"{name or 'claude'}"]
+    here = [name or "claude"]
     for k, lab in (("five_hour", "5h"), ("seven_day", "7d")):
         if rl.get(k):
-            parts.append(f"{lab} {rl[k].get('used_percentage', 0):.0f}%")
-    print(" · ".join(parts))
+            here.append(f"{lab} {rl[k].get('used_percentage', 0):.0f}%")
+    others = []
+    for a in cfg["accounts"]:
+        if a["name"] == name:
+            continue
+        u = usage(a)
+        if u.get("err"):
+            continue
+        mark = "!" if blocked(a, u, cfg["block_at"]) else ""
+        others.append(f"{mark}{a['name']} {u['pct']:.0f}%")
+    line = " · ".join(here)
+    if others:
+        line += "  |  " + " · ".join(others)
+    print(line)
 
 
 def cmd_install(cfg, args):
@@ -266,6 +291,49 @@ def cmd_install(cfg, args):
     d["statusLine"] = {"type": "command", "command": cmd}
     s.write_text(json.dumps(d, indent=2))
     print(f"installed into {s}\nrestart claude, then 'oms status' will see this account's usage.")
+
+
+def cmd_login(cfg, args):
+    """Log in to a new account first, name it after. `oms login codex`"""
+    if not args or args[0] not in ("claude", "codex"):
+        die("usage: oms login <claude|codex>")
+    vendor = args[0]
+    tmp = OMS / "pending" / f"{vendor}-{int(time.time())}"
+    tmp.mkdir(parents=True, exist_ok=True)
+    e = dict(os.environ)
+    for k in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"):
+        e.pop(k, None)
+    e["CLAUDE_CONFIG_DIR" if vendor == "claude" else "CODEX_HOME"] = str(tmp)
+    if vendor == "claude":
+        for sh in SHARED:  # so the login session looks like your normal setup
+            src = DEFAULT_CLAUDE_DIR / sh
+            if src.exists():
+                (tmp / sh).symlink_to(src)
+        print("launching claude - run /login inside it, then exit with Ctrl-D")
+        cmd = ["claude"]
+    else:
+        cmd = ["codex", "login"]
+    if subprocess.run(cmd, env=e).returncode != 0:
+        die(f"login failed; nothing registered. profile left at {tmp}")
+    taken = {a["name"] for a in cfg["accounts"]}
+    default = next(f"{vendor}-{i}" for i in range(2, 99) if f"{vendor}-{i}" not in taken)
+    try:
+        name = input(f"name this account [{default}]: ").strip() or default
+    except EOFError:
+        name = default
+    if name in taken:
+        die(f"'{name}' is already registered. pick another, profile is at {tmp}")
+    dest = OMS / "accounts" / name
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp.rename(dest)
+    acct = {"name": name, "vendor": vendor, "dir": str(dest)}
+    if vendor == "claude":
+        acct["paid_overflow"] = True
+    cfg["accounts"].append(acct)
+    save(cfg)
+    print(f"registered {name} -> {dest}")
+    if vendor == "claude":
+        print("set 'paid_overflow': false in ~/.oms/config.json if this plan has no credit attached")
 
 
 def cmd_env(cfg, args):
@@ -287,8 +355,10 @@ def selftest():
 
 
 CMDS = {"status": cmd_status, "add": cmd_add, "run": cmd_run, "auto": cmd_auto,
-        "statusline": cmd_statusline, "install": cmd_install, "env": cmd_env}
+        "login": cmd_login, "statusline": cmd_statusline, "install": cmd_install,
+        "env": cmd_env}
 USAGE_TEXT = __doc__ + """
+  oms login <claude|codex>             log in to a new account, then name it
   oms add <name> <claude|codex> [--dir PATH] [--paid-overflow yes|no]
   oms install                          wire usage recording into ~/.claude/settings.json
   oms status                           what every account has left

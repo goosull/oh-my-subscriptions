@@ -20,7 +20,15 @@ $ oms auto codex "fix the flaky test"
 oms: codex-alt (8% used)
 ```
 
-Install as a Claude Code plugin and `/oh-my-subscriptions:status` answers "which
+With the status line installed, every account stays visible while you work — the one
+you're in with both its windows, the rest with their hottest number, and a `!` on any
+that would bill you:
+
+```
+claude-main · 5h 25% · 7d 25%  |  claude-alt 12% · !codex-main 97%
+```
+
+Install as a Claude Code plugin and `/oh-my-subscriptions:status` also answers "which
 account should I use?" in the middle of a session.
 
 ## Install
@@ -33,11 +41,15 @@ claude plugin install oh-my-subscriptions@oh-my-subscriptions
 Then register your accounts and turn on usage recording:
 
 ```bash
-oms add claude-main claude --dir ~/.claude   # your existing login, reused in place
-oms add claude-alt  claude --paid-overflow no
-oms add codex-main  codex
+oms add claude-main claude --dir ~/.claude   # an existing login, reused in place
+oms login claude                             # a new one: log in first, name it after
+oms login codex
 oms install                                  # wires usage recording into settings.json
 ```
+
+`oms login` logs in to a scratch profile and only asks what to call the account once
+the login succeeds, so you never name an account you failed to log in to. To rename one
+later, edit its `name` in `~/.oms/config.json`.
 
 `oms install` sets `statusLine` in `~/.claude/settings.json`, chaining whatever status
 line you already had. Restart Claude Code and the numbers start filling in.
@@ -97,6 +109,7 @@ not this tool.
 ## Commands
 
 ```
+oms login <claude|codex>             log in to a new account, then name it
 oms add <name> <claude|codex> [--dir PATH] [--paid-overflow yes|no]
 oms install                          wire usage recording into ~/.claude/settings.json
 oms status                           what every account has left
