@@ -358,10 +358,16 @@ def cmd_login(cfg, args):
         die(f"login failed; nothing registered. profile left at {tmp}")
     taken = {a["name"] for a in cfg["accounts"]}
     default = next(f"{vendor}-{i}" for i in range(2, 99) if f"{vendor}-{i}" not in taken)
-    try:
-        name = input(f"name this account [{default}]: ").strip() or default
-    except EOFError:
+    if sys.stdin.isatty():
+        try:
+            name = input(f"name this account [{default}]: ").strip() or default
+        except EOFError:
+            name = default
+    else:
+        # No terminal to ask on, so don't pretend to: take the default and say so loudly.
         name = default
+        print(f"\n  no terminal to prompt on, so this is registered as '{name}'."
+              f"\n  rename it with:  oms rename {name} <your-name>\n")
     if name in taken:
         die(f"'{name}' is already registered. pick another, profile is at {tmp}")
     dest = OMS / "accounts" / name
