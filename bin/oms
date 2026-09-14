@@ -1515,6 +1515,7 @@ def selftest():
     _guard_holds()
     _choices_hold()
     _moving_accounts_is_safe()
+    _install_leaves_settings_intact()
     print("ok")
 
 
@@ -1600,6 +1601,43 @@ def _moving_accounts_is_safe():
         assert cfg["accounts"] == [] and "priority" not in cfg, \
             "a removed account must not linger in the pick order"
     OMS, CFG, USAGE = keep
+
+
+def _install_leaves_settings_intact():
+    """`oms install` edits a file oms does not own.
+
+    Everything else in settings.json belongs to Claude Code and to whatever the user put
+    there. Losing a key, or replacing a status line someone already had, is not an oms
+    problem the user can see - it is their editor quietly behaving differently.
+    """
+    import contextlib
+    import io
+    import tempfile
+    global DEFAULT_CLAUDE_DIR
+    keep = DEFAULT_CLAUDE_DIR
+    with tempfile.TemporaryDirectory() as d, contextlib.redirect_stdout(io.StringIO()):
+        DEFAULT_CLAUDE_DIR = Path(d)
+        f = DEFAULT_CLAUDE_DIR / "settings.json"
+        theirs = {"model": "opus", "permissions": {"allow": ["Bash(ls:*)"]},
+                  "statusLine": {"type": "command", "command": "~/mine.sh"}}
+        f.write_text(json.dumps(theirs))
+
+        cmd_install({}, [])
+        after = json.loads(f.read_text())
+        assert after.get("model") == "opus" and after.get("permissions") == theirs["permissions"], \
+            f"install dropped settings that were not its business: {sorted(after)}"
+        assert "~/mine.sh" in after["statusLine"]["command"], \
+            "a status line already there must be chained, not replaced"
+        assert "statusline" in after["statusLine"]["command"]
+
+        once = f.read_text()
+        cmd_install({}, [])
+        assert f.read_text() == once, "running install twice must not stack it on itself"
+
+        f.unlink()
+        cmd_install({}, [])          # and it must cope with no settings file at all
+        assert "statusline" in json.loads(f.read_text())["statusLine"]["command"]
+    DEFAULT_CLAUDE_DIR = keep
 
 
 def _choices_hold():

@@ -1,7 +1,7 @@
 {
   "name": "oms",
   "description": "oms - see what every Claude and Codex subscription you own has left, and never let one spill into paid credit.",
-  "version": "0.31.0",
+  "version": "0.31.1",
   "author": {
     "name": "goosull"
   },
