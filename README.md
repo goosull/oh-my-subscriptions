@@ -21,12 +21,16 @@ oms: codex-alt (8% used)
 ```
 
 With the status line installed, every account stays visible while you work — the one
-you're in with both its windows, the rest with their hottest number, and a `!` on any
-that would bill you:
+you're in with both its windows, the rest with their hottest one:
 
 ```
-claude-main · 5h 25% · 7d 25%  |  claude-alt 12% · !codex-main 97%
+claude-main 5h ━━━───── 34%  7d ━━━━━━─ 88%  │  claude-alt ━━──── 31%  │  codex-main ━━━━━━ 97%
 ```
+
+Green under 60%, amber above. **Red, with a leading `!`, means money and only money** —
+a plan with no credit attached can sit at 99% without turning red, because it stops
+rather than charges. The bar is drawn with a filled `━` and a lighter `─`, so it still
+reads on a terminal with no colour.
 
 Install as a Claude Code plugin and `/oh-my-subscriptions:status` also answers "which
 account should I use?" in the middle of a session.

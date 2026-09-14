@@ -231,8 +231,37 @@ def cmd_auto(cfg, args):
     os.execvpe(vendor, [vendor, *rest], env_for(best))
 
 
+# --- status line rendering ---------------------------------------------------
+# One strip, scannable in a glance. The account you are in is bright and shows both its
+# windows; the rest are dim and show their hottest one. Green under 60%, amber above,
+# and red with a leading "!" only where continuing would actually cost money.
+
+RESET, DIM, BOLD = "\033[0m", "\033[2m", "\033[1m"
+GREEN, YELLOW, RED = "\033[32m", "\033[33m", "\033[31m"
+
+
+def _tone(pct, is_blocked):
+    """Red means money, and only money. A plan with no credit attached can sit at 99%
+    without being a problem - it just stops - so a full bar there stays amber."""
+    if is_blocked:
+        return RED
+    return YELLOW if pct >= 60 else GREEN
+
+
+def _bar(pct, width, colour):
+    """Filled run in colour, remainder as a thinner rule so it reads without colour too."""
+    filled = max(0, min(width, round(pct / 100 * width)))
+    return f"{colour}{'━' * filled}{RESET}{DIM}{'─' * (width - filled)}{RESET}"
+
+
+def _meter(pct, blocked_, width, label=""):
+    c = _tone(pct, blocked_)
+    lab = f"{DIM}{label}{RESET} " if label else ""
+    return f"{lab}{_bar(pct, width, c)} {c}{pct:.0f}%{RESET}"
+
+
 def cmd_statusline(cfg, args):
-    """Claude Code statusLine command: record this account's rate_limits, print a line.
+    """Claude Code statusLine command: record this account's rate_limits, draw the strip.
 
     Any extra args are run as your previous status line and its output is passed through.
     """
@@ -255,24 +284,36 @@ def cmd_statusline(cfg, args):
         p = subprocess.run(args, input=raw, capture_output=True, text=True)
         sys.stdout.write(p.stdout)
         return
+
+    groups = []
     rl = d.get("rate_limits") or {}
-    here = [name or "claude"]
-    for k, lab in (("five_hour", "5h"), ("seven_day", "7d")):
-        if rl.get(k):
-            here.append(f"{lab} {rl[k].get('used_percentage', 0):.0f}%")
-    others = []
+    fh, sd = rl.get("five_hour") or {}, rl.get("seven_day") or {}
+    if fh or sd:  # the live session knows both its windows; the files only keep the worst
+        here = cfg_find_self(cfg, name)
+        limit = (here or {}).get("block_at", cfg["block_at"])
+        paid = (here or {}).get("paid_overflow", True)
+        meters = [_meter(w.get("used_percentage") or 0,
+                         paid and (w.get("used_percentage") or 0) >= limit, 8, lab)
+                  for w, lab in ((fh, "5h"), (sd, "7d")) if w]
+        groups.append(f"{BOLD}{name or 'claude'}{RESET} " + "  ".join(meters))
     for a in cfg["accounts"]:
         if a["name"] == name:
             continue
         u = usage(a)
         if u.get("err"):
             continue
-        mark = "!" if blocked(a, u, cfg["block_at"]) else ""
-        others.append(f"{mark}{a['name']} {u['pct']:.0f}%")
-    line = " · ".join(here)
-    if others:
-        line += "  |  " + " · ".join(others)
-    print(line)
+        b = bool(blocked(a, u, cfg["block_at"]))
+        warn = f"{RED}!{RESET}" if b else ""
+        groups.append(f"{warn}{DIM}{a['name']}{RESET} " + _meter(u["pct"], b, 6))
+    if groups:
+        print(f"  {DIM}│{RESET}  ".join(groups))
+
+
+def cfg_find_self(cfg, name):
+    for a in cfg["accounts"]:
+        if a["name"] == name:
+            return a
+    return None
 
 
 def cmd_install(cfg, args):
