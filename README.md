@@ -2,23 +2,61 @@
 
 One terminal, many AI subscriptions.
 
-You pay for more than one Claude or Codex plan. Each has its own 5-hour and weekly
-windows, and you have no idea which one has room left — so you burn one to zero,
-get cut off mid-task, and on some plans quietly roll onto metered credit.
+You pay for more than one coding plan. Each has its own windows and its own ceiling, and
+you have no idea which one has room left — so you burn one to zero, get cut off
+mid-task, and on the plans that allow it, quietly roll onto metered credit.
 
-`oms` shows every plan's remaining headroom in one table, and refuses to launch an
-account that could charge you.
+`oms status` shows every plan's remaining headroom in one table. `oms auto` launches
+whichever has the most useful room left. And neither will touch an account that is about
+to bill you.
 
 ```
 $ oms status
 ACCOUNT      VENDOR PLAN   USED                   RESETS    AS OF  PAID
-claude-main  claude -      5h 24% / 7d 41%        2d 3h     4m     ON
-claude-alt   claude -      5h 0% / 7d 12%         6d 1h     2d     OFF
-codex-main   codex  pro    7d 50%                 4d 17h    1m     OFF
+codex-main   codex  team   5h 0%  7d 8%  (142/5000 cr)  4d 18h   0m   ON
+codex-alt    codex  pro    7d 58%                       4d 16h   0m   OFF
+kiro-1       kiro   -      30d >=2% (21/1000 cr, cli only) 16d 7h 0m   OFF
 
 $ oms auto codex "fix the flaky test"
-oms: codex-alt (8% used)
+oms: codex-alt (7d 58%)
 ```
+
+Other tools rotate accounts when one hits a wall. The point of this one is the wall it
+will not let you walk through: a plan with paid overflow enabled does not stop at its
+ceiling, it starts charging, and `oms` refuses to launch it before that happens.
+
+## Install
+
+One file, Python 3 standard library only, no dependencies:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/goosull/oh-my-subscriptions/main/bin/oms \
+  -o ~/.local/bin/oms && chmod +x ~/.local/bin/oms
+```
+
+Then add your accounts. `oms login` installs the provider's CLI if it is missing, signs
+you in, names the account and spends one throwaway turn so it reports usage right away:
+
+```bash
+oms login codex          # repeat for a second account on the same provider
+oms login kiro my-kiro
+oms status
+```
+
+### Optionally, inside Claude Code
+
+The same repository is also a Claude Code plugin, which adds slash commands and the
+status line. It is not required to use `oms`, and `oms` does not need Claude Code.
+
+```bash
+claude plugin marketplace add goosull/oh-my-subscriptions
+claude plugin install oms@oh-my-subscriptions
+oms install    # wires usage recording into ~/.claude/settings.json
+```
+
+`oms install` sets `statusLine` in `~/.claude/settings.json`, chaining whatever status
+line you already had. It is also how a Claude account gets its usage numbers at all —
+that figure comes from Claude Code and exists nowhere else.
 
 With the status line installed, every account stays visible while you work — the one
 you're in with both its windows, the rest with their hottest one:
@@ -79,28 +117,6 @@ or changes the pick order, `/oms:config` sets an account's model or effort,
 `/oms:rename` renames one, and `/oms:handoff` writes the brief that carries your work
 to another account.
 
-## Install
-
-```bash
-claude plugin marketplace add goosull/oh-my-subscriptions
-claude plugin install oms@oh-my-subscriptions
-```
-
-Then register your accounts and turn on usage recording:
-
-```bash
-oms add claude-main claude --dir ~/.claude   # an existing login, reused in place
-oms login claude                             # a new one: log in first, name it after
-oms login codex
-oms install                                  # wires usage recording into settings.json
-```
-
-`oms login` logs in to a scratch profile and only asks what to call the account once
-the login succeeds, so you never name an account you failed to log in to. Got the name
-wrong anyway? `oms rename <old> <new>` moves its recorded usage along with it.
-
-`oms install` sets `statusLine` in `~/.claude/settings.json`, chaining whatever status
-line you already had. Restart Claude Code and the numbers start filling in.
 
 ## Providers
 

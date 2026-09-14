@@ -399,7 +399,7 @@ def blocked(acct, u, block_at):
 
 def cmd_status(cfg, args):
     if not cfg["accounts"]:
-        die("no accounts yet. try: oms add work claude --dir ~/.claude")
+        die(f"no accounts yet. try:  oms login <{'|'.join(PROVIDERS)}>")
     w = max(max(len(a["name"]) for a in cfg["accounts"]), 7)
     print(f"{'ACCOUNT':<{w}}  {'VENDOR':<6} {'PLAN':<6} {'USED':<22} {'RESETS':<9} {'AS OF':<6} PAID")
     for a in cfg["accounts"]:
