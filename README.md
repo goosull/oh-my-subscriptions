@@ -59,8 +59,9 @@ reads on a terminal with no colour.
 
 Installed as a Claude Code plugin, two skills keep it out of the terminal:
 `/oms:status` answers "which account should I use?" mid-session, `/oms:priority` shows
-or changes the pick order, `/oms:config` sets an account's model, effort, or name, and
-`/oms:handoff` writes the brief that carries your work to another account.
+or changes the pick order, `/oms:config` sets an account's model or effort,
+`/oms:rename` renames one, and `/oms:handoff` writes the brief that carries your work
+to another account.
 
 ## Install
 
