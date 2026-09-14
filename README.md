@@ -42,8 +42,8 @@ rather than charges. The bar is drawn with a filled `━` and a lighter `─`, s
 reads on a terminal with no colour.
 
 Installed as a Claude Code plugin, two skills keep it out of the terminal:
-`/oms:status` answers "which account should I use?" mid-session, and `/oms:priority`
-shows or changes the order without you remembering flags.
+`/oms:status` answers "which account should I use?" mid-session, `/oms:priority` shows
+or changes the pick order, and `/oms:config` sets an account's model, effort, or name.
 
 ## Install
 
@@ -111,6 +111,22 @@ Override it with an explicit order, `oms priority codex-b codex-a`, and go back 
 `oms priority --auto`. Accounts you leave out still get used, just after every listed
 one. Priority is only about order — an account that could bill you is skipped by the
 guard below no matter where it sits.
+
+## Per-account settings
+
+Each account can carry flags that are handed to its vendor's CLI on every launch, so a
+spare account can run a cheaper model, or one account can default to high effort:
+
+```bash
+oms config claude-alt --model sonnet
+oms config codex-main -c 'model_reasoning_effort="high"'
+oms config                              # what every account launches with
+oms config claude-alt --clear
+```
+
+There is no translation layer — these are the vendor's own flags, so anything `claude`
+or `codex` accepts works, including `-c <key>=<value>` for any codex config key. Stored
+flags go in front of anything you type at the call site, so an explicit flag still wins.
 
 ## The paid-credit guard
 

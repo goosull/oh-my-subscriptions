@@ -211,6 +211,29 @@ def env_for(acct):
     return e
 
 
+def cmd_config(cfg, args):
+    """Per-account flags, handed to the vendor CLI on every launch.
+
+    No translation layer: these are that vendor's own flags, so anything it accepts
+    works - model, effort, context window, profile.
+    """
+    if not args:
+        for a in cfg["accounts"]:
+            got = " ".join(a.get("args") or []) or "-"
+            print(f"  {a['name']:<14} {a['vendor']:<7} {got}")
+        print("\n  oms config <name> <flags...>   set        (e.g. oms config x --model opus)")
+        print("  oms config <name> --clear     clear")
+        return
+    a = find(cfg, args[0])
+    rest = args[1:]
+    if rest == ["--clear"]:
+        a.pop("args", None)
+    elif rest:
+        a["args"] = rest
+    save(cfg)
+    print(f"{a['name']}: {' '.join(a.get('args') or []) or '(no flags)'}")
+
+
 def cmd_run(cfg, args, check=True):
     if not args:
         die("usage: oms run [--force] <account> [cli args...]")
@@ -223,7 +246,7 @@ def cmd_run(cfg, args, check=True):
         elif (b := blocked(a, u, cfg["block_at"])):
             die(f"{a['name']} blocked: {b}\n     'oms run --force {a['name']}' to override, "
                 f"or 'oms auto {a['vendor']}' to pick another")
-    os.execvpe(a["vendor"], [a["vendor"], *args[1:]], env_for(a))
+    os.execvpe(a["vendor"], [a["vendor"], *a.get("args", []), *args[1:]], env_for(a))
 
 
 def rank(u):
@@ -297,7 +320,7 @@ def cmd_auto(cfg, args):
     why = (f"5h {bu['short_pct']:.0f}%" if bu.get("short_pct") is not None
            else f"weekly {bu['pct']:.0f}%")
     print(f"oms: {best['name']} ({why})", file=sys.stderr)
-    os.execvpe(vendor, [vendor, *rest], env_for(best))
+    os.execvpe(vendor, [vendor, *best.get("args", []), *rest], env_for(best))
 
 
 # --- status line rendering ---------------------------------------------------
@@ -549,7 +572,8 @@ def selftest():
 
 CMDS = {"status": cmd_status, "add": cmd_add, "run": cmd_run, "auto": cmd_auto,
         "login": cmd_login, "rename": cmd_rename, "priority": cmd_priority,
-        "statusline": cmd_statusline, "install": cmd_install, "env": cmd_env}
+        "config": cmd_config, "statusline": cmd_statusline, "install": cmd_install,
+        "env": cmd_env}
 USAGE_TEXT = __doc__ + """
   oms login <claude|codex>             log in to a new account, then name it
   oms add <name> <claude|codex> [--dir PATH] [--paid-overflow yes|no]
@@ -559,6 +583,7 @@ USAGE_TEXT = __doc__ + """
   oms auto <claude|codex> [args...]    launch the freest account that can't bill you
   oms rename <old> <new>               rename an account, keeping its usage history
   oms priority [<name>... | --auto]    show or set the order `oms auto` picks in
+  oms config [<name> <flags...>]       vendor flags to launch an account with
   oms env <name>                       print the export line for a shell
 """
 
@@ -568,9 +593,8 @@ if __name__ == "__main__":
         selftest(); sys.exit(0)
     if not argv or argv[0] not in CMDS:
         print(USAGE_TEXT); sys.exit(0 if argv else 1)
-    force = "--force" in argv[1:]
-    rest = [x for x in argv[1:] if x != "--force"]
     if argv[0] == "run":
-        cmd_run(load(), rest, check=not force)
+        rest = [x for x in argv[1:] if x != "--force"]
+        cmd_run(load(), rest, check="--force" not in argv[1:])
     else:
-        CMDS[argv[0]](load(), rest)
+        CMDS[argv[0]](load(), argv[1:])
