@@ -222,9 +222,13 @@ worth less held in reserve.
 $ oms priority
 priority: automatic - soonest reset first, then smallest pool
 
-  codex 1. codex-main     resets every 5h, 0% used
-  codex 2. codex-alt      resets every 7d, 56% used, pool 100
+  codex  1. codex-main   resets every 5h, 18% used, pool 5000   can bill
+  codex  2. codex-alt    resets every 7d, 60% used              cannot bill
 ```
+
+The order and what it costs you sit on the same line on purpose: reading one off
+`oms priority` and the other off `oms status` is how a reserve gets burned while an
+expiring window evaporates.
 
 Pool size is whatever you set: `oms set codex-alt size=100`. It is any number you can
 compare across your own accounts — oms cannot read it, because neither vendor reports an

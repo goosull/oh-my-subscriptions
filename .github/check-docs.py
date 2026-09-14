@@ -110,7 +110,14 @@ for doc in sorted(ROOT.glob("*.md")) + sorted(ROOT.glob("agent/*.md")) + \
                        f"describes an older version of the same thing:\n      {line[:70]}...")
     # sample output is the first thing anyone reads, and it goes stale every time a
     # column is added - ON PACE FOR arrived and the README kept the older header
+    # every command whose output is shown, checked against what it prints today
     for line in text.splitlines():
+        if line.lstrip().startswith("priority: automatic"):
+            real = subprocess.run([sys.executable, str(OMS), "priority"],
+                                  capture_output=True, text=True).stdout.splitlines()
+            if real and line.strip() != real[0].strip():
+                bad.append(f"{where}: the sample says\n      {line.strip()}"
+                           f"\n    but the tool prints\n      {real[0].strip()}")
         if line.startswith("ACCOUNT") and "VENDOR" in line:
             shown, real = line.split(), subprocess.run(
                 [sys.executable, str(OMS), "status"], capture_output=True, text=True
