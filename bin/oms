@@ -7,7 +7,7 @@ plan window has left, and refuses to launch an account that could bill you.
 Everything it reads is either a documented extension point or a file the vendor's
 own CLI wrote on your disk. It never calls a vendor API and never handles a token.
 """
-import json, os, subprocess, sys, time
+import json, os, re, subprocess, sys, time
 from pathlib import Path
 
 OMS = Path(os.environ.get("OMS_HOME", Path.home() / ".oms"))
@@ -56,6 +56,8 @@ def claude_usage(acct):
     return {"plan": "-", "pct": pct, "resets": hot.get("resets_at"),
             "short_pct": fh.get("used_percentage") if fh else None,
             "window": "5h" if hot is fh else "7d",
+            "windows": [(l, w.get("used_percentage") or 0)
+                        for w, l in ((fh, "5h"), (sd, "7d")) if w],
             "age": time.time() - d.get("at", 0),
             "paid_on": bool(acct.get("paid_overflow", True)),
             "detail": f"5h {fh.get('used_percentage', 0):.0f}% / 7d {sd.get('used_percentage', 0):.0f}%"}
@@ -67,7 +69,7 @@ def claude_usage(acct):
 
 # Bump whenever the shape of a usage dict changes, so a cache written by an older
 # build is discarded instead of quietly serving a record with fields missing.
-CACHE_V = 2
+CACHE_V = 3
 
 
 def codex_usage(acct):
@@ -105,6 +107,8 @@ def _codex_scan(acct):
                       if w and (w.get("window_minutes") or 10**9) <= 360), None)
         return {"plan": rl.get("plan_type", "?"), "pct": pct, "resets": hot.get("resets_at"),
                 "short_pct": short, "window": _win(hot.get("window_minutes")),
+                "windows": [(_win(w.get("window_minutes")), w.get("used_percent") or 0)
+                            for w in (pw, sw) if w],
                 "age": time.time() - f.stat().st_mtime,
                 "paid_on": bool(cr.get("has_credits")) or float(cr.get("balance") or 0) > 0,
                 "detail": _cdetail(pw, sw)}
@@ -346,29 +350,64 @@ def cmd_statusline(cfg, args):
         sys.stdout.write(p.stdout)
         return
 
-    groups = []
+    here = cfg_find_self(cfg, name)
     rl = d.get("rate_limits") or {}
-    fh, sd = rl.get("five_hour") or {}, rl.get("seven_day") or {}
-    if fh or sd:  # the live session knows both its windows; the files only keep the worst
-        here = cfg_find_self(cfg, name)
+    live = [(l, (rl.get(k) or {}).get("used_percentage") or 0)
+            for k, l in (("five_hour", "5h"), ("seven_day", "7d")) if rl.get(k)]
+
+    chips = []
+    if live:  # the running session is authoritative for its own account
         limit = (here or {}).get("block_at", cfg["block_at"])
         paid = (here or {}).get("paid_overflow", True)
-        meters = [_meter(w.get("used_percentage") or 0,
-                         paid and (w.get("used_percentage") or 0) >= limit, 8, lab)
-                  for w, lab in ((fh, "5h"), (sd, "7d")) if w]
-        groups.append(f"{BOLD}{name or 'claude'}{RESET} " + "  ".join(meters))
+        chips.append(_group(name or "claude", live,
+                            lambda p: paid and p >= limit, True, 8))
     for a in cfg["accounts"]:
         if a["name"] == name:
             continue
         u = usage(a)
-        if u.get("err"):
+        if u.get("err") or not u.get("windows"):
             continue
         b = bool(blocked(a, u, cfg["block_at"]))
-        warn = f"{RED}!{RESET}" if b else ""
-        groups.append(f"{warn}{DIM}{a['name']}{RESET} "
-                      + _meter(u["pct"], b, 6, u.get("window", "")))
-    if groups:
-        print(f"  {DIM}│{RESET}  ".join(groups))
+        chips.append(_group(a["name"], u["windows"], lambda p, b=b: b, False, 5))
+    if chips:
+        for row in _pack(chips, int(os.environ.get("COLUMNS") or 80)):
+            print(row)
+
+
+def _group(label, windows, is_blocked, active, width):
+    meters = "  ".join(_meter(p, is_blocked(p), width, lab) for lab, p in windows)
+    warn = f"{RED}!{RESET}" if any(is_blocked(p) for _, p in windows) else ""
+    name = f"{BOLD}{label}{RESET}" if active else f"{DIM}{label}{RESET}"
+    return f"{warn}{name} {meters}"
+
+
+def _wide(t):
+    return len(re.sub(r"\x1b\[[0-9;]*m", "", t))
+
+
+def _pack(chips, columns, max_rows=3):
+    """Fill each row up to the terminal width, then start another.
+
+    The status line cannot scroll and is truncated if it overruns, so with enough
+    accounts the only choices are wrapping or dropping some. Wrap, but stop at a few
+    rows so a long account list can never swallow the screen.
+    """
+    sep = f"  {DIM}│{RESET}  "
+    rows, cur = [], []
+    for c in chips:
+        trial = cur + [c]
+        if cur and _wide(sep.join(trial)) > columns:
+            rows.append(cur)
+            cur = [c]
+        else:
+            cur = trial
+    if cur:
+        rows.append(cur)
+    if len(rows) > max_rows:
+        dropped = sum(len(r) for r in rows[max_rows:])
+        rows = rows[:max_rows]
+        rows[-1].append(f"{DIM}+{dropped} more{RESET}")
+    return [sep.join(r) for r in rows]
 
 
 def cfg_find_self(cfg, name):
@@ -486,6 +525,10 @@ def selftest():
     assert rank({"short_pct": 10, "pct": 99}) < rank({"short_pct": 80, "pct": 5})
     assert rank({"short_pct": None, "pct": 20}) < rank({"short_pct": None, "pct": 70})
     assert "7d" in _meter(8, False, 6, "7d") and "5h" in _meter(8, False, 6, "5h")
+    assert _wide(f"{RED}abc{RESET}") == 3, "width must ignore colour escapes"
+    wide = ["x" * 30] * 4
+    assert len(_pack(wide, 80)) == 2 and len(_pack(wide, 200)) == 1
+    assert "+6 more" in _pack(["y" * 30] * 12, 80, max_rows=3)[-1]
     print("ok")
 
 
