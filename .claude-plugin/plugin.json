@@ -1,6 +1,6 @@
 {
-  "name": "oh-my-subscriptions",
-  "description": "See what every Claude and Codex subscription you own has left, and never let one spill into paid credit.",
+  "name": "oms",
+  "description": "oms - see what every Claude and Codex subscription you own has left, and never let one spill into paid credit.",
   "version": "0.1.0",
   "author": {
     "name": "goosull"

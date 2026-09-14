@@ -33,14 +33,14 @@ rather than charges. The bar is drawn with a filled `━` and a lighter `─`, s
 reads on a terminal with no colour.
 
 Installed as a Claude Code plugin, two skills keep it out of the terminal:
-`/oh-my-subscriptions:status` answers "which account should I use?" mid-session, and
-`/oh-my-subscriptions:priority` shows or changes the order without you remembering flags.
+`/oms:status` answers "which account should I use?" mid-session, and `/oms:priority`
+shows or changes the order without you remembering flags.
 
 ## Install
 
 ```bash
 claude plugin marketplace add goosull/oh-my-subscriptions
-claude plugin install oh-my-subscriptions@oh-my-subscriptions
+claude plugin install oms@oh-my-subscriptions
 ```
 
 Then register your accounts and turn on usage recording:

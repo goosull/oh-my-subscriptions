@@ -5,7 +5,7 @@
   },
   "plugins": [
     {
-      "name": "oh-my-subscriptions",
+      "name": "oms",
       "source": "./",
       "description": "See what every Claude and Codex subscription you own has left, and never let one spill into paid credit."
     }
