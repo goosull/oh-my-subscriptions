@@ -22,6 +22,11 @@ codex-main  5h 18%  7d 11%  (142/5000 cr)
 $ codex -c model_reasoning_effort="high"
 ```
 
+`ON PACE FOR` is where the window lands if the last few hours continue. Under 100% is
+quota you are not going to get to spend; over means you run out before it resets. It
+stays `-` until there are two readings far enough apart in the same window to draw a
+line through — a projection from one sample is a guess with a decimal point on it.
+
 `BILLS?` is what happens when a plan reaches its ceiling: `no` means it stops and costs
 nothing, `at risk` means paid overflow is on so the ceiling is a charge, and `BLOCKED`
 means `oms` will not launch it.

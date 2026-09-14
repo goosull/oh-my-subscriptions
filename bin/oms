@@ -84,6 +84,52 @@ CACHE_V = 6
 CACHE_TTL = 60
 
 
+TRAIL_MAX = 400
+
+
+def note_sample(acct, u):
+    """Append what this account had used, so a pace can be worked out later.
+
+    A snapshot answers "am I about to overshoot". It cannot answer the other half of the
+    question - whether a plan is on course to be spent at all - and quota left unspent
+    when a window resets is as wasted as quota overspent is expensive.
+    """
+    if u.get("err") or not u.get("resets"):
+        return
+    f = USAGE / f"{acct['name']}.trail.jsonl"
+    try:
+        line = json.dumps({"at": int(time.time()), "pct": round(u["pct"], 2),
+                           "resets": int(float(u["resets"]))})
+        old = f.read_text().splitlines() if f.exists() else []
+        # keep only this window: a reading from before the last reset says nothing
+        keep = [l for l in old[-TRAIL_MAX:]
+                if l and json.loads(l).get("resets") == int(float(u["resets"]))]
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text("\n".join([*keep, line]) + "\n")
+    except (OSError, ValueError):
+        pass
+
+
+def pace(acct, u):
+    """Where this window lands if the last few hours continue. None when unknowable."""
+    f = USAGE / f"{acct['name']}.trail.jsonl"
+    try:
+        rows = [json.loads(l) for l in f.read_text().splitlines() if l]
+    except (OSError, ValueError):
+        return None
+    rows = [r for r in rows if r.get("resets") == int(float(u.get("resets") or 0))]
+    if len(rows) < 2:
+        return None
+    span = rows[-1]["at"] - rows[0]["at"]
+    burn = rows[-1]["pct"] - rows[0]["pct"]
+    if span < 900 or burn <= 0:                      # too short, or not moving
+        return None
+    left = max(0.0, float(u["resets"]) - time.time())
+    projected = u["pct"] + burn / span * left
+    return {"per_hour": burn / span * 3600, "projected": projected,
+            "hits_at": time.time() + (100 - u["pct"]) / (burn / span) if burn else None}
+
+
 def cached(acct, read):
     """Memoise a reading briefly. Every provider needs this: codex spawns a subprocess,
     kiro walks a session history that only grows, and the status line re-renders often."""
@@ -409,7 +455,9 @@ def usage(acct):
         return {"err": f"{acct['vendor']} reports no usage"}
     if not installed(acct["vendor"]):
         return {"err": f"{p['bin']} not installed"}
-    return p["usage"](acct)
+    u = p["usage"](acct)
+    note_sample(acct, u)
+    return u
 
 
 def _until(ts):
@@ -419,6 +467,15 @@ def _until(ts):
     if s <= 0:
         return "now"
     return f"{s // 86400}d {s % 86400 // 3600}h" if s >= 86400 else f"{s // 3600}h {s % 3600 // 60}m"
+
+
+def _pace_text(p):
+    """Where the window lands, or why we cannot say yet."""
+    if not p:
+        return "-"
+    if p["projected"] >= 100:
+        return f"full in {_until(p['hits_at'])}"
+    return f"{p['projected']:.0f}% by reset"
 
 
 def _ago(sec):
@@ -450,20 +507,22 @@ def cmd_status(cfg, args):
     rows, blocked_any = [], False
     for a, u in zip(cfg["accounts"], usage_all(cfg["accounts"])):
         if u.get("err"):
-            rows.append([a["name"], a["vendor"], "-", "! " + u["err"], "-", "-", "-"])
+            rows.append([a["name"], a["vendor"], "-", "! " + u["err"], "-", "-", "-", "-"])
             continue
         b = blocked(a, u, cfg["block_at"])
         blocked_any = blocked_any or bool(b)
         rows.append([a["name"], a["vendor"], (u["plan"] or "-")[:8], u["detail"],
-                     _until(u["resets"]), _ago(u.get("age")),
+                     _until(u["resets"]), _pace_text(pace(a, u)), _ago(u.get("age")),
                      ("BLOCKED" if b else "at risk") if u["paid_on"] else "no"])
-    head = ["ACCOUNT", "VENDOR", "PLAN", "USED", "RESETS", "AS OF", "BILLS?"]
+    head = ["ACCOUNT", "VENDOR", "PLAN", "USED", "RESETS", "ON PACE FOR", "AS OF", "BILLS?"]
     # widths come from the data; a long reading must not shove every later column right
     w = [max(len(r[i]) for r in [head] + rows) for i in range(len(head))]
     print("  ".join(h.ljust(w[i]) for i, h in enumerate(head)).rstrip())
     for r in rows:
         print("  ".join(c.ljust(w[i]) for i, c in enumerate(r)).rstrip())
-    print("\nAS OF is how stale the reading is. BILLS? is what happens at the ceiling:"
+    print("\nON PACE FOR is where this window lands if the last hours continue - under"
+          "\n100% means quota you will not get to spend, over means you run out early."
+          "\nAS OF is how stale the reading is. BILLS? is what happens at the ceiling:"
           "\n  no       the plan stops, and costs nothing"
           "\n  at risk  paid overflow is on, so the ceiling is a charge, not a stop"
           "\n  BLOCKED  oms will not launch this account" + (
@@ -1184,7 +1243,8 @@ def cmd_rename(cfg, args):
     a = find(cfg, old)
     if any(x["name"] == new for x in cfg["accounts"]):
         die(f"'{new}' is already registered")
-    for suffix in (".json", ".cache.json", ".warned.json", ".codex-cache.json"):
+    for suffix in (".json", ".cache.json", ".warned.json", ".trail.jsonl",
+                   ".codex-cache.json"):
         src = USAGE / f"{old}{suffix}"
         if src.exists():
             src.rename(USAGE / f"{new}{suffix}")
@@ -1227,7 +1287,8 @@ def cmd_remove(cfg, args):
         die("usage: oms remove <name> [--purge]   (--purge also deletes the profile)")
     a = find(cfg, args[0])
     cfg["accounts"] = [x for x in cfg["accounts"] if x["name"] != a["name"]]
-    for suffix in (".json", ".cache.json", ".warned.json", ".codex-cache.json"):
+    for suffix in (".json", ".cache.json", ".warned.json", ".trail.jsonl",
+                   ".codex-cache.json"):
         (USAGE / f"{a['name']}{suffix}").unlink(missing_ok=True)
     if cfg.get("priority"):
         cfg["priority"] = [n for n in cfg["priority"] if n != a["name"]] or None
@@ -1337,6 +1398,7 @@ def selftest():
     assert "Opus" in _session_line({"model": {"display_name": "Opus"}}, 60)
     assert _session_line({}, 60) is None
     assert _mins("5h") < _mins("7d") < _mins("zz"), "columns run shortest window first"
+    _pace_reads_the_trail()
     r = reading([("5h", 12), ("7d", 40)], plan="pro", paid_on=True)
     assert r["binding"] == ["7d", 40] and r["pct"] == 40, "the headline is the fullest"
     assert r["soonest"] == ["5h", 12], "the order runs on the one that resets first"
@@ -1404,6 +1466,33 @@ def selftest():
     assert "no usage" in noted[1] and noted[1].startswith("b")
     _guard_holds()
     print("ok")
+
+
+def _pace_reads_the_trail():
+    """A projection is only as honest as the window it is drawn from."""
+    import tempfile
+    global USAGE
+    real, now = USAGE, int(time.time())
+    with tempfile.TemporaryDirectory() as d:
+        USAGE = Path(d)
+        acct, reset = {"name": "t"}, now + 3600 * 3
+        trail = lambda rows: (USAGE / "t.trail.jsonl").write_text(
+            "\n".join(json.dumps(r) for r in rows) + "\n")
+
+        assert pace(acct, reading([("7d", 50)], resets=reset)) is None, "no trail, no claim"
+        trail([{"at": now - 7200, "pct": 40, "resets": reset},
+               {"at": now, "pct": 60, "resets": reset}])
+        p = pace(acct, reading([("7d", 60)], resets=reset))
+        assert round(p["per_hour"]) == 10 and round(p["projected"]) == 90, p
+        assert "90%" in _pace_text(p)
+
+        # a reading from the previous window must not be projected into this one
+        assert pace(acct, reading([("7d", 60)], resets=reset + 99)) is None
+        # nothing spent means nothing to extrapolate, not a projection of zero
+        trail([{"at": now - 7200, "pct": 60, "resets": reset},
+               {"at": now, "pct": 60, "resets": reset}])
+        assert pace(acct, reading([("7d", 60)], resets=reset)) is None
+    USAGE = real
 
 
 def _guard_holds():
