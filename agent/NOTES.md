@@ -22,6 +22,17 @@ failed request. `src/types.ts` carries no thinking block at all, which sidesteps
 construction — at the price of losing reasoning continuity across a switch. That is a
 real cost of routing, alongside the re-sent context `cost.ts` measures.
 
+## History has to be relabelled on the way out
+
+An assistant message on the wire carries `api`, `provider` and `model`, and pi-ai's
+converters branch on them. So a transcript written by one engine and replayed to another
+cannot keep the original labels: a codex history arriving at the anthropic converter
+still calling itself codex is read through the wrong branch.
+
+`src/wire.ts` stamps every replayed assistant message with the engine it is being sent
+to. Who actually said it lives in our own `Entry.by`, which is the record that matters
+and the one the cost ledger and the router read.
+
 ## The Anthropic OAuth path impersonates Claude Code
 
 `providers/claude-code-fingerprint.ts` is explicit about it:

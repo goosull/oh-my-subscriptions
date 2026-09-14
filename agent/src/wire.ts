@@ -17,7 +17,17 @@ export interface Sender {
   ): AsyncGenerator<{ text?: string; call?: Call }, void>;
 }
 
-const toWire = (transcript: readonly Entry[]): any[] =>
+/**
+ * Rebuild the transcript in the shape the vendor's client expects.
+ *
+ * An assistant message has to carry api/provider/model, and pi-ai's converters branch
+ * on them. History produced by one engine and replayed to another therefore has to be
+ * stamped with the engine it is being *sent to*, not the one that wrote it — otherwise
+ * a codex transcript arrives at an anthropic converter labelled as codex and is read
+ * through the wrong branch. Who actually said it is kept in our own `Entry.by`, which
+ * is the record that matters.
+ */
+const toWire = (transcript: readonly Entry[], target: any): any[] =>
   transcript.map(e => {
     if (e.from === "user") return { role: "user", content: e.text };
     if (e.from === "tool")
@@ -34,9 +44,9 @@ const toWire = (transcript: readonly Entry[]): any[] =>
         ...(e.said ? [{ type: "text", text: e.said }] : []),
         ...e.calls.map(c => ({ type: "toolCall", id: c.id, name: c.tool, arguments: c.input })),
       ],
-      api: "mock",
-      provider: e.by.id.split(":")[0],
-      model: e.by.id,
+      api: target.api,
+      provider: target.provider,
+      model: target.id,
       usage: EMPTY_USAGE,
       stopReason: "stop",
     };
@@ -54,7 +64,7 @@ export function sender(engine: Engine, model: any, streamFn = stream): Sender {
     async *send(system, transcript, tools, signal) {
       const context = {
         systemPrompt: system,
-        messages: toWire(transcript),
+        messages: toWire(transcript, model),
         tools: tools.map(t => ({ name: t.name, description: t.describe, parameters: t.input })),
       };
       const events = streamFn(model, context as any, { signal } as any);

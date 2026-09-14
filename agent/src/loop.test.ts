@@ -131,3 +131,23 @@ test("the router is quoted what moving costs over staying", async () => {
   expect(quotes[1].penaltyA).toBe(0);
   expect(quotes[1].penaltyB).toBeGreaterThan(0);
 });
+
+test("replayed history is stamped with the engine it is sent to, not the one that wrote it", async () => {
+  const { sender } = await import("./wire");
+  let seen: any;
+  const target = { api: "anthropic", provider: "anthropic", id: "claude-x" };
+  const s = sender({ id: "b" }, target, ((_m: any, ctx: any) => {
+    seen = ctx;
+    return (async function* () {})();
+  }) as any);
+
+  await (async () => { for await (const _ of s.send([], [
+    { from: "user", text: "hi" },
+    { from: "model", by: { id: "a:cheap" }, said: "yes", calls: [] },
+  ], [])) { /* drain */ } })();
+
+  const assistant = seen.messages.find((m: any) => m.role === "assistant");
+  expect(assistant.api).toBe("anthropic");      // not "mock", and not the writer's
+  expect(assistant.provider).toBe("anthropic");
+  expect(assistant.model).toBe("claude-x");
+});
