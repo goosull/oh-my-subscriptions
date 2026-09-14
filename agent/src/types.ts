@@ -43,6 +43,15 @@ export interface Ask {
   since: readonly Entry[];
   /** How many requests this turn has already made. */
   step: number;
+  /** Who answered the previous request, if anyone has yet. */
+  current?: string;
+  /**
+   * What sending this request to `engine` would cost in characters no cache can cover,
+   * because that engine has not been shown them. Staying put is usually near zero;
+   * moving is the whole conversation so far. The router decides what to spend, so it
+   * is the one place that has to be able to see the price.
+   */
+  priceOf(engine: string): number;
 }
 
 /** The decision this whole project is about. */

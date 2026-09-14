@@ -24,6 +24,8 @@ const mocks: Record<string, any> = {
   legwork: createMockModel({
     id: "legwork", provider: "mock",
     responses: [{ content: [{ type: "toolCall", name: "shell", arguments: { cmd: "uname -s" } }] }],
+    // if the router declines to hand off, this one has to finish the job itself
+    handler: () => ({ content: ["Darwin."] }),
   }),
   answer: createMockModel({
     id: "answer", provider: "mock",
@@ -51,8 +53,22 @@ function back(role: Role): Account | undefined {
   return spendable.find(a => a.pays_on_overflow) ?? free[0];
 }
 
+/**
+ * What a switch has to be worth before it is taken.
+ *
+ * Moving to an engine that has not seen the conversation re-sends all of it with no
+ * cache behind it, and that bill is the transcript, not the reply — so it grows the
+ * longer you wait. Past this many characters the better model stops paying for itself
+ * and the router stays where it is.
+ */
+const WORTH_SWITCHING = 4000;
+
 const route = (ask: Ask): Engine => {
-  const role = roleFor(ask);
+  const want = roleFor(ask);
+  const price = ask.priceOf(want);
+  const role = ask.current && want !== ask.current && price > WORTH_SWITCHING
+    ? (ask.current as Role)      // the move costs more than it would buy
+    : want;
   const acct = back(role);
   return { id: role, account: acct?.name };
 };
@@ -70,6 +86,10 @@ const loop = {
 };
 
 const transcript: Entry[] = [];
+// Uncomment to see the router decline the switch: with this much history already on the
+// wire, moving costs more than the better model is worth.
+if (Bun.env.HEAVY) transcript.push({ from: "tool", callId: "seed", tool: "read", result: "x".repeat(6000) });
+
 for await (const ev of run(loop as any, transcript, "what kernel is this?")) {
   if (ev.at === "routed") {
     const a = spendable.find(x => x.name === ev.engine.account);

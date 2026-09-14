@@ -51,9 +51,12 @@ export async function* run(
   let last = lastEngine(transcript);
 
   for (let step = 0; step < limit; step++) {
-    const ask: Ask = { transcript, since, step };
-    const engine = await loop.route(ask);
     const size = measure(transcript);
+    const ask: Ask = {
+      transcript, since, step, current: last || undefined,
+      priceOf: id => size - Math.min(seen.get(id) ?? 0, size),
+    };
+    const engine = await loop.route(ask);
     const warm = seen.get(engine.id) ?? 0;
     const sent: Sent = { size, cold: size - Math.min(warm, size), switched: !!last && last !== engine.id };
     seen.set(engine.id, size);

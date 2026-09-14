@@ -76,9 +76,24 @@ before a conversation has accumulated anything is nearly free; changing your min
 pays for the whole history. A design that swaps engines every other request would spend
 more re-sending context than it saves on the cheaper model.
 
-The loop keeps this count itself — `Ledger` tracks how much each engine has been shown
-and every turn ends with what routing cost — so the question is answerable on real
-traffic rather than argued about.
+The loop keeps this count itself. `Ledger` tracks how much each engine has been shown,
+every turn ends with what routing cost, and the router is handed `priceOf(engine)` before
+it decides — because the router is what spends the money, and it was deciding blind.
+
+With a price in hand it can refuse:
+
+```
+short conversation
+  step 1  answer   -> codex-work   (can bill)  cold 257 ch
+  1 switch. 302 characters sent, 257 of them (85%) only because an engine had not seen them.
+
+the same turn, later in the conversation
+  step 1  legwork  -> codex-pro20  (cannot bill)
+  0 switches. 12416 characters sent, 0 of them (0%) ...
+```
+
+Same router, same request. The second one declines the handoff because by then the
+better model no longer covers what moving to it costs.
 
 ## Still not measured
 
