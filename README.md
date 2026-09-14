@@ -24,12 +24,15 @@ With the status line installed, every account stays visible while you work — t
 you're in with both its windows, the rest with their hottest one:
 
 ```
-Opus high  ·  1M window  ·  ctx 66% left  │  claude-main 5h ━━━───── 34%  7d ━━━━━━─ 88%
-claude-alt 5h ━──── 12%  7d ━━─── 31%  │  codex-main 5h ━━━━━ 97%  7d ━━─── 40%
+Opus 5   high   ctx ━━━────── 68% of 1M
+claude-main 5h ━━───  34%  7d ━━━━━  88%   claude-alt  5h ━────  12%  7d ━━───  31%
+codex-main  5h ━━━━━  97%  7d ━━───  40%
 ```
 
-The left segment is the running session itself — its model, reasoning effort, context
-window and how much of it is left — so a model or `/effort` change shows up immediately.
+The first line is the session itself — model, reasoning effort, and context headroom —
+so a model swap or a mid-session `/effort` change shows up immediately. Accounts sit
+below it in a grid with columns that line up, laid out so a wrap never strands a lone
+account on the last row.
 
 Accounts appear in the order `oms auto` would pick them — the one you're in first, then
 its own vendor's alternatives, so the next account to switch to is always the next chip.
@@ -131,6 +134,14 @@ oms config claude-alt --clear
 There is no translation layer — these are the vendor's own flags, so anything `claude`
 or `codex` accepts works, including `-c <key>=<value>` for any codex config key. Stored
 flags go in front of anything you type at the call site, so an explicit flag still wins.
+
+## Before you hit the wall
+
+Claude Code offers to switch accounts once you have already hit the limit — by which
+point there is no context budget left to write a handoff with. The plugin's
+`UserPromptSubmit` hook fires earlier, at ten points below the block threshold, naming
+the account with room so the switch can be prepared rather than scrambled. Set
+`"warn_at": N` in `~/.oms/config.json` to move it.
 
 ## Switching without losing the thread
 

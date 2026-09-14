@@ -249,6 +249,55 @@ def _handoff_prompt():
             " pick up from it.\n\n" + t[:HANDOFF_MAX])
 
 
+def cmd_check(cfg, args):
+    """UserPromptSubmit hook: warn while there is still room to hand off.
+
+    Claude Code offers to switch accounts only once you have already hit the wall, by
+    which point there is no budget left to write a brief with. Fire early instead.
+    """
+    try:
+        d = json.loads(sys.stdin.read())
+    except ValueError:
+        d = {}
+    name = os.environ.get("OMS_ACCOUNT")
+    if not name:
+        cur = Path(os.environ.get("CLAUDE_CONFIG_DIR") or DEFAULT_CLAUDE_DIR)
+        for a in cfg["accounts"]:
+            if a["vendor"] == "claude" and Path(a["dir"]) == cur:
+                name = a["name"]
+    a = cfg_find_self(cfg, name)
+    if not a:
+        return
+    u = usage(a)
+    if u.get("err"):
+        return
+    warn_at = cfg.get("warn_at", min(a.get("block_at", cfg["block_at"]), 95) - 10)
+    if u["pct"] < warn_at:
+        return
+    paid = " Continuing past the limit on this account is billed." if u["paid_on"] else ""
+    alt = _best_alt(cfg, a)
+    print(f"<oms-quota>{a['name']} is at {u['pct']:.0f}% of its {u.get('window', '')} "
+          f"window, resetting in {_until(u.get('resets'))}.{paid} "
+          f"{alt} Offer the user a handoff now, while there is still context budget to "
+          f"write one: use the oms:handoff skill, then give them the launch line. Say "
+          f"this once and do not repeat it every turn.</oms-quota>")
+
+
+def _best_alt(cfg, acct):
+    cands = []
+    for b in cfg["accounts"]:
+        if b["name"] == acct["name"]:
+            continue
+        v = usage(b)
+        if v.get("err") or blocked(b, v, cfg["block_at"]):
+            continue
+        cands.append((sel_key(cfg, b, v), b, v))
+    if not cands:
+        return "No other account has known headroom."
+    _, b, v = min(cands, key=lambda t: t[0])
+    return f"`oms run {b['name']} --handoff` has room ({v['pct']:.0f}% used)."
+
+
 def cmd_config(cfg, args):
     """Per-account flags, handed to the vendor CLI on every launch.
 
@@ -367,14 +416,13 @@ def cmd_auto(cfg, args):
 
 
 # --- status line rendering ---------------------------------------------------
-# One strip, scannable in a glance. The account you are in is bright and shows both its
-# windows; the rest are dim and show whichever window is binding on them right now.
-# Every meter carries its window label, so a number is never ambiguous about which
-# quota it describes. Green under 60%, amber above, and red with a leading "!" only
-# where continuing would actually cost money.
+# Two tiers. The session it is running goes on its own line; the accounts go below it
+# in a grid whose columns line up, so a wrap reads as a table rather than as an
+# accident. Green under 60%, amber above, and red only where continuing costs money.
 
 RESET, DIM, BOLD = "\033[0m", "\033[2m", "\033[1m"
 GREEN, YELLOW, RED = "\033[32m", "\033[33m", "\033[31m"
+GAP = "   "
 
 
 def _tone(pct, is_blocked):
@@ -395,6 +443,69 @@ def _meter(pct, blocked_, width, label=""):
     c = _tone(pct, blocked_)
     lab = f"{DIM}{label}{RESET} " if label else ""
     return f"{lab}{_bar(pct, width, c)} {c}{pct:>3.0f}%{RESET}"
+
+
+def _tokens(n):
+    if not n:
+        return "?"
+    return f"{n // 1000000}M" if n >= 1000000 else f"{n // 1000}K"
+
+
+def _session_line(d):
+    """Model, effort and context headroom - the things that change under you mid-task."""
+    mdl = (d.get("model") or {}).get("display_name") or (d.get("model") or {}).get("id")
+    if not mdl:
+        return None
+    cw = d.get("context_window") or {}
+    size = cw.get("context_window_size")
+    # "Opus 5 (1M context)" states the window in the name, and the ctx segment states it
+    # again. Keep the segment, which is where the live number already is, and drop the
+    # parenthetical from the name.
+    if size:
+        mdl = re.sub(r"\s*\([^)]*\)\s*$", "", mdl) or mdl
+    bits = [f"{BOLD}{mdl}{RESET}"]
+    if (d.get("effort") or {}).get("level"):
+        bits.append(f"{DIM}{d['effort']['level']}{RESET}")
+    left = cw.get("remaining_percentage")
+    if left is None and cw.get("used_percentage") is not None:
+        left = 100 - cw["used_percentage"]
+    if left is not None:
+        c = RED if left < 15 else (YELLOW if left < 35 else GREEN)
+        of = f"{DIM} of {_tokens(size)}{RESET}" if size else ""
+        bits.append(f"{DIM}ctx{RESET} {_bar(100 - left, 9, c)} {c}{left:.0f}%{RESET}{of}")
+    elif size:
+        bits.append(f"{DIM}{_tokens(size)} context{RESET}")
+    return f"{GAP}".join(bits)
+
+
+def _wide(t):
+    return len(re.sub(r"\x1b\[[0-9;]*m", "", t))
+
+
+def _pad(t, w):
+    return t + " " * max(0, w - _wide(t))
+
+
+def _grid(chips, columns, max_rows=3):
+    """Lay the accounts out as a grid: equal-width cells, columns that line up.
+
+    A greedy fill leaves whatever did not fit alone on the last row, which reads as a
+    mistake. Pick the column count from the widest cell, then balance the rows so the
+    last one is never a lone orphan. The status line cannot scroll, so anything past
+    max_rows collapses into a count rather than being silently truncated.
+    """
+    if not chips:
+        return []
+    w = max(_wide(c) for c in chips)
+    ncols = max(1, min(len(chips), (columns + len(GAP)) // (w + len(GAP))))
+    nrows = min(max_rows, -(-len(chips) // ncols))
+    # spread evenly instead of packing rows full and stranding the remainder
+    ncols = -(-min(len(chips), nrows * ncols) // nrows)
+    shown, extra = chips[:nrows * ncols], len(chips) - nrows * ncols
+    if extra > 0:
+        shown[-1] = f"{DIM}+{extra} more{RESET}"
+    rows = [shown[i:i + ncols] for i in range(0, len(shown), ncols)]
+    return [GAP.join(_pad(c, w) for c in r).rstrip() for r in rows]
 
 
 def cmd_statusline(cfg, args):
@@ -428,14 +539,10 @@ def cmd_statusline(cfg, args):
             for k, l in (("five_hour", "5h"), ("seven_day", "7d")) if rl.get(k)]
 
     chips = []
-    sess = _session_chip(d)
-    if sess:
-        chips.append(sess)
     if live:  # the running session is authoritative for its own account
         limit = (here or {}).get("block_at", cfg["block_at"])
         paid = (here or {}).get("paid_overflow", True)
-        chips.append(_group(name or "claude", live,
-                            lambda p: paid and p >= limit, True, 8))
+        chips.append(_cell(name or "claude", live, lambda p: paid and p >= limit, True))
     rest = []
     for a in cfg["accounts"]:
         if a["name"] == name:
@@ -447,71 +554,19 @@ def cmd_statusline(cfg, args):
                      sel_key(cfg, a, u), a, u))
     for *_, a, u in sorted(rest, key=lambda t: t[:3]):
         b = bool(blocked(a, u, cfg["block_at"]))
-        chips.append(_group(a["name"], u["windows"], lambda p, b=b: b, False, 5))
-    if chips:
-        for row in _pack(chips, int(os.environ.get("COLUMNS") or 80)):
-            print(row)
+        chips.append(_cell(a["name"], u["windows"], lambda p, b=b: b, False))
+
+    cols = int(os.environ.get("COLUMNS") or 80)
+    out = [x for x in [_session_line(d)] if x] + _grid(chips, cols)
+    for row in out:
+        print(row)
 
 
-def _group(label, windows, is_blocked, active, width):
-    meters = "  ".join(_meter(p, is_blocked(p), width, lab) for lab, p in windows)
+def _cell(label, windows, is_blocked, active):
+    meters = "  ".join(_meter(p, is_blocked(p), 5, lab) for lab, p in windows)
     warn = f"{RED}!{RESET}" if any(is_blocked(p) for _, p in windows) else ""
     name = f"{BOLD}{label}{RESET}" if active else f"{DIM}{label}{RESET}"
     return f"{warn}{name} {meters}"
-
-
-def _tokens(n):
-    if not n:
-        return "?"
-    return f"{n // 1000000}M" if n >= 1000000 else f"{n // 1000}K"
-
-
-def _session_chip(d):
-    """What this session is actually running: model, effort, and context headroom."""
-    mdl = (d.get("model") or {}).get("display_name") or (d.get("model") or {}).get("id")
-    if not mdl:
-        return None
-    eff = (d.get("effort") or {}).get("level")
-    cw = d.get("context_window") or {}
-    left = cw.get("remaining_percentage")
-    if left is None and cw.get("used_percentage") is not None:
-        left = 100 - cw["used_percentage"]
-    bits = [f"{BOLD}{mdl}{RESET}" + (f" {DIM}{eff}{RESET}" if eff else "")]
-    if cw.get("context_window_size"):
-        bits.append(f"{DIM}{_tokens(cw['context_window_size'])} window{RESET}")
-    if left is not None:
-        c = RED if left < 15 else (YELLOW if left < 35 else GREEN)
-        bits.append(f"{DIM}ctx{RESET} {c}{left:.0f}% left{RESET}")
-    return f"  {DIM}·{RESET}  ".join(bits)
-
-
-def _wide(t):
-    return len(re.sub(r"\x1b\[[0-9;]*m", "", t))
-
-
-def _pack(chips, columns, max_rows=3):
-    """Fill each row up to the terminal width, then start another.
-
-    The status line cannot scroll and is truncated if it overruns, so with enough
-    accounts the only choices are wrapping or dropping some. Wrap, but stop at a few
-    rows so a long account list can never swallow the screen.
-    """
-    sep = f"  {DIM}│{RESET}  "
-    rows, cur = [], []
-    for c in chips:
-        trial = cur + [c]
-        if cur and _wide(sep.join(trial)) > columns:
-            rows.append(cur)
-            cur = [c]
-        else:
-            cur = trial
-    if cur:
-        rows.append(cur)
-    if len(rows) > max_rows:
-        dropped = sum(len(r) for r in rows[max_rows:])
-        rows = rows[:max_rows]
-        rows[-1].append(f"{DIM}+{dropped} more{RESET}")
-    return [sep.join(r) for r in rows]
 
 
 def cfg_find_self(cfg, name):
@@ -636,22 +691,30 @@ def selftest():
     assert "7d" in _meter(8, False, 6, "7d") and "5h" in _meter(8, False, 6, "5h")
     assert _wide(f"{RED}abc{RESET}") == 3, "width must ignore colour escapes"
     assert _tokens(1000000) == "1M" and _tokens(200000) == "200K" and _tokens(None) == "?"
-    c = _session_chip({"model": {"display_name": "Opus"}, "effort": {"level": "high"},
+    c = _session_line({"model": {"display_name": "Opus"}, "effort": {"level": "high"},
                        "context_window": {"context_window_size": 1000000, "used_percentage": 34}})
-    assert "Opus" in c and "high" in c and "1M" in c and "66% left" in c
+    assert "Opus" in c and "high" in c and "1M" in c and "66%" in c
+    # the window is stated once: in the ctx segment, not also in the model name
+    sl = _session_line({"model": {"display_name": "Opus 5 (1M context)"},
+                        "context_window": {"context_window_size": 1000000,
+                                           "used_percentage": 34}})
+    assert "of 1M" in sl and "(1M context)" not in sl
     # a model that takes no effort, and a session before its first API call
-    assert "Opus" in _session_chip({"model": {"display_name": "Opus"}})
-    assert _session_chip({}) is None
+    assert "Opus" in _session_line({"model": {"display_name": "Opus"}})
+    assert _session_line({}) is None
     wide = ["x" * 30] * 4
-    assert len(_pack(wide, 80)) == 2 and len(_pack(wide, 200)) == 1
-    assert "+6 more" in _pack(["y" * 30] * 12, 80, max_rows=3)[-1]
+    assert len(_grid(wide, 80)) == 2 and len(_grid(wide, 200)) == 1
+    # three cells across a two-column width must split 2+1, never 3 then a lone orphan
+    assert [len(r.split()) for r in _grid(["a"] * 3, 5)] == [2, 1]
+    assert "+" in _grid(["y" * 30] * 20, 80, max_rows=3)[-1]
+    assert all(_wide(r) <= 80 for r in _grid(["z" * 24] * 7, 80)), "a row must never overrun"
     print("ok")
 
 
 CMDS = {"status": cmd_status, "add": cmd_add, "run": cmd_run, "auto": cmd_auto,
         "login": cmd_login, "rename": cmd_rename, "priority": cmd_priority,
-        "config": cmd_config, "handoff": cmd_handoff, "statusline": cmd_statusline,
-        "install": cmd_install, "env": cmd_env}
+        "config": cmd_config, "handoff": cmd_handoff, "check": cmd_check,
+        "statusline": cmd_statusline, "install": cmd_install, "env": cmd_env}
 USAGE_TEXT = __doc__ + """
   oms login <claude|codex>             log in to a new account, then name it
   oms add <name> <claude|codex> [--dir PATH] [--paid-overflow yes|no]
