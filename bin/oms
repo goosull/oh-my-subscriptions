@@ -1290,6 +1290,10 @@ def cmd_rename(cfg, args):
         d.rename(d.parent / new)
         a["dir"] = str(d.parent / new)
     a["name"] = new
+    # the pick order names accounts too; leaving the old one there drops this account
+    # out of an explicit order without saying so
+    if cfg.get("priority"):
+        cfg["priority"] = [new if n == old else n for n in cfg["priority"]]
     save(cfg)
     print(f"{old} -> {new}")
 
@@ -1510,6 +1514,7 @@ def selftest():
     assert "no usage" in noted[1] and noted[1].startswith("b")
     _guard_holds()
     _choices_hold()
+    _moving_accounts_is_safe()
     print("ok")
 
 
@@ -1549,6 +1554,52 @@ def _pace_reads_the_trail():
                {"at": now, "pct": 70, "resets": reset}])
         assert pace(acct, fast)["hits_at"] - now > WARN_WITHIN, "1%/h from 70% is not"
     USAGE = real
+
+
+def _moving_accounts_is_safe():
+    """rename moves files and remove --purge deletes a directory.
+
+    Everything else here is a wrong answer; these two are a lost account, so they are
+    exercised against a real temporary tree rather than reasoned about.
+    """
+    import contextlib
+    import io
+    import tempfile
+    global OMS, CFG, USAGE
+    keep = (OMS, CFG, USAGE)
+    with tempfile.TemporaryDirectory() as d, contextlib.redirect_stdout(io.StringIO()):
+        OMS = Path(d)
+        CFG, USAGE = OMS / "config.json", OMS / "usage"
+        home = OMS / "accounts" / "one"
+        home.mkdir(parents=True)
+        (home / "auth.json").write_text("{}")          # stands in for a login
+        USAGE.mkdir()
+        (USAGE / "one.json").write_text('{"at": 1}')
+        (USAGE / "one.cache.json").write_text('{"v": 0}')
+        cfg = {"accounts": [{"name": "one", "vendor": "codex", "dir": str(home)}],
+               "block_at": 95, "priority": ["one"]}
+
+        cmd_rename(cfg, ["one", "two"])
+        moved = OMS / "accounts" / "two"
+        assert moved.is_dir() and (moved / "auth.json").exists(), "the login must come along"
+        assert not home.exists(), "and not be left behind in the old name"
+        assert cfg["accounts"][0]["dir"] == str(moved), "config must point at where it went"
+        assert (USAGE / "two.json").exists() and not (USAGE / "one.json").exists(), \
+            "recorded usage follows the name, or the account reads as never used"
+        assert (USAGE / "two.cache.json").exists()
+
+        outside = Path(d) / "not-ours"
+        outside.mkdir()
+        cfg["accounts"].append({"name": "elsewhere", "vendor": "codex", "dir": str(outside)})
+        cmd_remove(cfg, ["elsewhere", "--purge"])
+        assert outside.is_dir(), "--purge must never delete a directory oms did not create"
+
+        cmd_remove(cfg, ["two", "--purge"])
+        assert not moved.exists(), "but must delete one it did"
+        assert not (USAGE / "two.json").exists(), "and take the usage with it"
+        assert cfg["accounts"] == [] and "priority" not in cfg, \
+            "a removed account must not linger in the pick order"
+    OMS, CFG, USAGE = keep
 
 
 def _choices_hold():
