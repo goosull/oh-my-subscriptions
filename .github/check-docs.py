@@ -99,11 +99,21 @@ if hooks_file.exists():
 # section can end up described two or three times, each copy a different vintage. The
 # oldest ones describe behaviour that no longer exists.
 import collections
-seen = collections.Counter(l.strip() for l in readme.splitlines() if len(l.strip()) > 40)
-for line, n in seen.items():
-    if n > 1:
-        bad.append(f"README.md: this sentence appears {n} times, so at least one copy is "
-                   f"describing an older version of the same thing:\n      {line[:72]}...")
+for doc in sorted(ROOT.glob("*.md")) + sorted(ROOT.glob("agent/*.md")) + \
+        sorted(ROOT.glob("skills/*/SKILL.md")):
+    where = doc.relative_to(ROOT)
+    text = doc.read_text()
+    seen = collections.Counter(l.strip() for l in text.splitlines() if len(l.strip()) > 40)
+    for line, n in seen.items():
+        if n > 1:
+            bad.append(f"{where}: this sentence appears {n} times, so at least one copy "
+                       f"describes an older version of the same thing:\n      {line[:70]}...")
+    # a line count in prose is true on the day it is written and false soon after
+    for m in re.finditer(r"`?(src/)?([\w.-]+\.ts)`?[^\n]{0,40}?(\d{2,4}) lines", text):
+        f = ROOT / "agent" / (m.group(1) or "") / m.group(2)
+        if f.exists() and len(f.read_text().splitlines()) != int(m.group(3)):
+            bad.append(f"{where}: says {m.group(2)} is {m.group(3)} lines; it is "
+                       f"{len(f.read_text().splitlines())}")
 
 print(f"checked {len(list(ROOT.glob('skills/*/SKILL.md')))} skills")
 if bad:

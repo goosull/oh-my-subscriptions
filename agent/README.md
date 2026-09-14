@@ -46,14 +46,18 @@ be exercised long before a model is attached.
 | | |
 |---|---|
 | `src/types.ts` | our vocabulary. No vendor type appears in it |
-| `src/loop.ts` | the loop. 73 lines, and knows nothing about any provider |
+| `src/loop.ts` | the loop. Short, and knows nothing about any provider |
 | `src/wire.ts` | the only file that imports `@oh-my-pi/pi-ai` |
-| `src/../oms.ts` | reads `oms status --json` for what each account has left |
+| `src/loop.test.ts` | what the loop must not get wrong |
+| `oms.ts` | reads `oms status --json` for what each account has left |
+| `demo.ts` | one turn, two engines, routed on real subscriptions |
+| `cost.ts` | what a switch costs at different points in a conversation |
 
 `pi-ai` is 109k lines of provider adapters, OAuth and wire formats — work that has
 nothing to do with this idea and would never be worth repeating. It is behind `wire.ts`
 and nothing above that line knows it is there. `pi-agent-core` was dropped once the loop
-existed; the dependency list is one package.
+existed, so one package is all this runs on. TypeScript and its Bun types are the only
+others, and they build nothing — they only check what is written here.
 
 ## What a switch costs
 
