@@ -726,7 +726,8 @@ def _table(rows, columns, max_rows=4):
     """
     if not rows:
         return [], 0
-    labels = sorted({l for _, _, wins, _ in rows for l in wins}, key=_mins)
+    labels = sorted({l for _, _, w, _ in rows if not isinstance(w, str) for l in w},
+                    key=_mins)
     name_w = max(_wide(n) + _wide(m) for m, n, _, _ in rows) + 1
     cell_w = BAR + 5
     extra = len(rows) - max_rows
@@ -734,8 +735,11 @@ def _table(rows, columns, max_rows=4):
         rows = rows[:max_rows]
     out = []
     for mark, name, wins, blocked_ in rows:
-        cells = [_pad(_meter(wins[l], blocked_) if l in wins else "", cell_w) for l in labels]
         head = name + (f" {mark}" if mark.strip() else "")
+        if isinstance(wins, str):  # an account with nothing to meter still gets a row
+            out.append(f"{_pad(head, name_w)}  {DIM}{wins}{RESET}")
+            continue
+        cells = [_pad(_meter(wins[l], blocked_) if l in wins else "", cell_w) for l in labels]
         out.append(f"{_pad(head, name_w)}  " + " ".join(cells).rstrip())
     if extra > 0:
         out[-1] = f"{DIM}+{extra} more account{'s' if extra > 1 else ''}{RESET}"
@@ -784,14 +788,16 @@ def cmd_statusline(cfg, args):
         if a["name"] == name:
             continue
         u = usage(a)
-        if u.get("err") or not u.get("windows"):
-            continue
         rest.append((a["vendor"] != (here or {}).get("vendor"), a["vendor"],
-                     sel_key(cfg, a, u), a, u))
+                     sel_key(cfg, a, u) if not u.get("err") else (9,),
+                     a, u))
     for *_, a, u in sorted(rest, key=lambda t: t[:3]):
+        nm = f"{DIM}{a['name']}{RESET}"
+        if u.get("err") or not u.get("windows"):
+            rows.append(("", nm, u.get("err", "no windows"), False))
+            continue
         b = bool(blocked(a, u, cfg["block_at"]))
-        rows.append((f"{RED}!{RESET}" if b else "",
-                     f"{DIM}{a['name']}{RESET}", dict(u["windows"]), b))
+        rows.append((f"{RED}!{RESET}" if b else "", nm, dict(u["windows"]), b))
 
     body, width = _table(rows, int(os.environ.get("COLUMNS") or 80))
     head = _session_line(d, width)
@@ -1007,6 +1013,9 @@ def selftest():
     assert all(ord(ch) < 128 for b in marked_plain for ch in b if ch not in "▬─"), \
         "only the bar may use non-ASCII; an ambiguous-width marker breaks alignment"
     assert "+2 more accounts" in _table([mk(str(i), {"7d": i}) for i in range(6)], 80, 4)[0][-1]
+    # an account with nothing to meter keeps its row and says why
+    noted, _ = _table([mk("a", {"7d": 5}), mk("b", "no usage")], 80)
+    assert "no usage" in noted[1] and noted[1].startswith("b")
     print("ok")
 
 

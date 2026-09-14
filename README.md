@@ -24,17 +24,19 @@ With the status line installed, every account stays visible while you work — t
 you're in with both its windows, the rest with their hottest one:
 
 ```
-Opus 5  high  ctx ▬▬▬▬▬▬──── 61% left of 1M
+Opus 5 high  ctx ▬▬▬▬▬▬──── 61% left of 1M
 claude-main   ▬▬▬▬────  44% ▬▬──────  27%
 claude-alt    ────────   0% ▬───────   8%
 codex-main !                ▬▬▬▬▬▬▬▬  97%
+kiro-1        kiro reports no usage
 ```
 
 One account per row, one column per window ordered shortest first — so the column a
 meter sits in says which window it is, and the labels that used to repeat against every
 account are gone. An account with no short window leaves that column empty rather than
 sliding into it. The account you are in is the bright one; `!` marks an account that
-would bill you.
+would bill you. An account with nothing to meter keeps its row and says why, so a
+provider that reports no usage does not simply vanish from the list.
 
 Every row starts with its name rather than with indentation, because Claude Code strips
 leading whitespace from a status line and a leading marker column would collapse on
