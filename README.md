@@ -270,6 +270,35 @@ $ oms doctor
 
 It exits non-zero when anything is unreachable, so it works in a script too.
 
+## Before you hit the wall
+
+Claude Code offers to switch accounts once you have already hit the limit, by which
+point there is no context budget left to write a handoff with. The plugin's
+`UserPromptSubmit` hook fires earlier: ten points below the block threshold, or whenever
+the last few hours' rate puts the ceiling under 45 minutes away, whichever comes first.
+
+A percentage alone is the wrong trigger — 85% that has not moved all day is nothing to
+act on, and 70% burning 40% an hour is forty minutes from the wall. It names the account
+with room, says why it spoke, and then stays quiet for an hour unless usage moves another
+ten points. The warning asks you to act, so repeating it every prompt would eat the
+context it is warning you about.
+
+Move the percentage trigger with `"warn_at": N` in `~/.oms/config.json`.
+
+## Switching without losing the thread
+
+A session cannot move between accounts: its transcript is written with the account that
+owns it, and codex and claude share no transcript format. So `oms` carries a brief rather
+than pretending to resume a conversation.
+
+```bash
+/oms:handoff                      # Claude writes a brief from the current session
+oms run claude-alt --handoff      # it becomes the first prompt over there
+oms auto codex --handoff          # works across vendors too, it is only text
+```
+
+`oms handoff -` takes a brief on stdin if you would rather write it yourself.
+
 ## The paid-credit guard
 
 An account is blocked when **paid overflow is on for it AND usage is at or above

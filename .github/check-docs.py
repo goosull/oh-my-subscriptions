@@ -66,6 +66,10 @@ install = f"claude plugin install {manifest['name']}@{market['name']}"
 if install not in (ROOT / "README.md").read_text():
     bad.append(f"README.md: the install line should read `{install}`")
 
+# A hook that ships undocumented is one that fires at someone with no explanation
+# anywhere. The quota warning went undocumented for eleven releases after a replacement
+# edit silently matched nothing.
+readme = (ROOT / "README.md").read_text()
 hooks_file = ROOT / "hooks" / "hooks.json"
 if hooks_file.exists():
     try:
@@ -86,6 +90,9 @@ if hooks_file.exists():
                                f"which is not in this repository")
                 elif not os.access(ROOT / target, os.X_OK):
                     bad.append(f"hooks/hooks.json:1: {target} is not executable")
+            if event not in readme:
+                bad.append(f"README.md: nothing explains the {event} hook, which fires "
+                           f"at people who install this")
     print(f"checked {sum(len(v) for v in hooks.values())} hook(s)")
 
 print(f"checked {len(list(ROOT.glob('skills/*/SKILL.md')))} skills")
