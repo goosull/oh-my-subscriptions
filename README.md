@@ -112,11 +112,16 @@ A provider you have not installed is still a provider. `oms login kiro` offers t
 install the CLI first and then logs you in:
 
 ```
-$ oms login kiro
+$ oms login kiro kiro-student
 kiro-cli is not installed. oms can run:
   brew install --cask kiro-cli
 run it? [Y/n]
 ```
+
+Naming the account up front logs straight into it, adopting one you already registered.
+Leave the name off and oms asks once the login succeeds, so a failed login never leaves
+a named half-account behind. `oms remove <name>` unregisters one, and `--purge` also
+deletes the profile directory, but only ever one oms created itself.
 
 It picks the first install route whose own tool is on your machine (Homebrew before
 the curl script, for instance) and never installs silently — with no terminal to ask

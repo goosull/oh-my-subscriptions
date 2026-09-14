@@ -815,9 +815,14 @@ def cmd_login(cfg, args):
     assume_yes = "--yes" in args
     args = [a for a in args if a != "--yes"]
     if not args or args[0] not in PROVIDERS:
-        die(f"usage: oms login <{'|'.join(PROVIDERS)}> [--yes]")
+        die(f"usage: oms login <{'|'.join(PROVIDERS)}> [<name>] [--yes]")
     vendor = args[0]
-    tmp = OMS / "pending" / f"{vendor}-{int(time.time())}"
+    want = args[1] if len(args) > 1 else None
+    existing = next((a for a in cfg["accounts"] if a["name"] == want), None)
+    if existing and existing["vendor"] != vendor:
+        die(f"{want} is a {existing['vendor']} account, not {vendor}")
+    # log in straight into the account being adopted, so nothing has to move afterwards
+    tmp = Path(existing["dir"]) if existing else OMS / "pending" / f"{vendor}-{int(time.time())}"
     tmp.mkdir(parents=True, exist_ok=True)
     e = dict(os.environ)
     for k in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"):
@@ -835,14 +840,19 @@ def cmd_login(cfg, args):
         print(f"launching {p['bin']} - run /login inside it, then exit with Ctrl-D")
     if subprocess.run(cmd, env=e).returncode != 0:
         die(f"login failed; nothing registered. profile left at {tmp}")
+    if existing:
+        print(f"logged in as {existing['name']}")
+        return
     taken = {a["name"] for a in cfg["accounts"]}
-    default = next(f"{vendor}-{i}" for i in range(2, 99) if f"{vendor}-{i}" not in taken)
-    if sys.stdin.isatty():
+    default = want or next(f"{vendor}-{i}" for i in range(2, 99) if f"{vendor}-{i}" not in taken)
+    if want:
+        name = want
+    elif sys.stdin.isatty():
         try:
             name = input(f"name this account [{default}]: ").strip() or default
         except EOFError:
             name = default
-    else:
+    elif True:
         # No terminal to ask on, so don't pretend to: take the default and say so loudly.
         name = default
         print(f"\n  no terminal to prompt on, so this is registered as '{name}'."
@@ -881,6 +891,31 @@ def cmd_rename(cfg, args):
     a["name"] = new
     save(cfg)
     print(f"{old} -> {new}")
+
+
+def cmd_remove(cfg, args):
+    """Unregister an account. Its profile directory is kept unless you say otherwise."""
+    purge = "--purge" in args
+    args = [a for a in args if a != "--purge"]
+    if not args:
+        die("usage: oms remove <name> [--purge]   (--purge also deletes the profile)")
+    a = find(cfg, args[0])
+    cfg["accounts"] = [x for x in cfg["accounts"] if x["name"] != a["name"]]
+    for suffix in (".json", ".codex-cache.json"):
+        (USAGE / f"{a['name']}{suffix}").unlink(missing_ok=True)
+    if cfg.get("priority"):
+        cfg["priority"] = [n for n in cfg["priority"] if n != a["name"]] or None
+        if cfg["priority"] is None:
+            cfg.pop("priority")
+    save(cfg)
+    d = Path(a["dir"])
+    if purge and d.parent == OMS / "accounts":  # only ever delete a profile oms created
+        __import__("shutil").rmtree(d, ignore_errors=True)
+        print(f"removed {a['name']} and deleted {d}")
+    else:
+        print(f"removed {a['name']}" + (f"  (profile left at {d})" if d.exists() else ""))
+        if purge:
+            print("  not deleted: oms did not create that directory")
 
 
 def cmd_env(cfg, args):
@@ -960,10 +995,12 @@ def selftest():
 
 CMDS = {"status": cmd_status, "add": cmd_add, "run": cmd_run, "auto": cmd_auto,
         "login": cmd_login, "rename": cmd_rename, "priority": cmd_priority,
-        "config": cmd_config, "set": cmd_set, "handoff": cmd_handoff, "check": cmd_check,
+        "config": cmd_config, "set": cmd_set, "remove": cmd_remove,
+        "handoff": cmd_handoff, "check": cmd_check,
         "statusline": cmd_statusline, "install": cmd_install, "env": cmd_env}
 USAGE_TEXT = __doc__ + """
-  oms login <provider> [--yes]         install if needed, log in, then name it
+  oms login <provider> [<name>] [--yes]  install if needed, log in, name it
+  oms remove <name> [--purge]          unregister an account
   oms add <name> <provider> [--dir PATH] [--paid-overflow yes|no]
   oms install                          wire usage recording into ~/.claude/settings.json
   oms status                           what every account has left
