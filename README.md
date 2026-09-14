@@ -106,7 +106,16 @@ line you already had. Restart Claude Code and the numbers start filling in.
 |---|---|---|
 | claude | `CLAUDE_CONFIG_DIR=<dir>` | `rate_limits` in the [statusLine stdin JSON](https://code.claude.com/docs/en/statusline) |
 | codex | `CODEX_HOME=<dir>` | `rate_limits` in the session rollout files codex writes under that dir |
-| kiro | `KIRO_HOME=<dir>` | — Kiro exposes no usage command and writes no local quota record |
+| kiro | `KIRO_HOME=<dir>` — settings and sessions only | — no usage command, no local quota record |
+
+Kiro is a partial fit and oms says so rather than pretending. `KIRO_HOME` moves its
+settings and sessions, but not its login: the credential is a single machine-wide
+keychain entry, and a brand new `KIRO_HOME` still reports the account already signed in.
+So Kiro holds **one login at a time** — registering a second Kiro account warns that
+logging into it signs the other out. It also exposes no usage command and writes no
+local quota record, so `oms status` says the provider reports no usage instead of
+showing the account as merely unused, and `oms auto` skips it because there is nothing
+to choose on.
 
 A provider you have not installed is still a provider. `oms login kiro` offers to
 install the CLI first and then logs you in:
@@ -127,10 +136,6 @@ Leave the name off and oms asks once the login succeeds, so a failed login never
 a named half-account behind. `oms remove <name>` unregisters one, and `--purge` also
 deletes the profile directory, but only ever one oms created itself.
 
-
-Where a provider reports no usage, `oms status` says so rather than showing it as an
-empty account, and `oms auto` leaves it out of automatic selection because there is
-nothing to choose on.
 
 All three environment variables are documented, supported configuration. **`oms` never calls a vendor
 API, never reads or writes a credential, and never handles a token.** It reads a
