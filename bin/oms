@@ -611,7 +611,7 @@ def _check(cfg, args):
     if u.get("err"):
         return
     warn_at = cfg.get("warn_at", min(a.get("block_at", cfg["block_at"]), 95) - 10)
-    if u["pct"] < warn_at:
+    if u["pct"] < warn_at or not _due(a, u["pct"]):
         return
     paid = " Continuing past the limit on this account is billed." if u["paid_on"] else ""
     alt = _best_alt(cfg, a)
@@ -619,7 +619,29 @@ def _check(cfg, args):
           f"window, resetting in {_until(u.get('resets'))}.{paid} "
           f"{alt} Offer the user a handoff now, while there is still context budget to "
           f"write one: use the oms:handoff skill, then give them the launch line. Say "
-          f"this once and do not repeat it every turn.</oms-quota>")
+          f"this once; oms will not raise it again for a while.</oms-quota>")
+
+
+# Once over the line the hook fires on every prompt, and the warning itself asks not to
+# be repeated - so it has to be the thing that stops. Say it again only after an hour,
+# or sooner if the situation has actually moved on by another ten points.
+WARN_AGAIN_AFTER = 3600
+WARN_AGAIN_AT = 10
+
+
+def _due(acct, pct):
+    f = USAGE / f"{acct['name']}.warned.json"
+    try:
+        last = json.loads(f.read_text())
+        if time.time() - last["at"] < WARN_AGAIN_AFTER and pct - last["pct"] < WARN_AGAIN_AT:
+            return False
+    except (OSError, ValueError, KeyError):
+        pass
+    try:
+        write_json(f, {"at": time.time(), "pct": pct})
+    except OSError:
+        pass
+    return True
 
 
 def _best_alt(cfg, acct):
@@ -1162,7 +1184,7 @@ def cmd_rename(cfg, args):
     a = find(cfg, old)
     if any(x["name"] == new for x in cfg["accounts"]):
         die(f"'{new}' is already registered")
-    for suffix in (".json", ".cache.json", ".codex-cache.json"):
+    for suffix in (".json", ".cache.json", ".warned.json", ".codex-cache.json"):
         src = USAGE / f"{old}{suffix}"
         if src.exists():
             src.rename(USAGE / f"{new}{suffix}")
@@ -1205,7 +1227,7 @@ def cmd_remove(cfg, args):
         die("usage: oms remove <name> [--purge]   (--purge also deletes the profile)")
     a = find(cfg, args[0])
     cfg["accounts"] = [x for x in cfg["accounts"] if x["name"] != a["name"]]
-    for suffix in (".json", ".cache.json", ".codex-cache.json"):
+    for suffix in (".json", ".cache.json", ".warned.json", ".codex-cache.json"):
         (USAGE / f"{a['name']}{suffix}").unlink(missing_ok=True)
     if cfg.get("priority"):
         cfg["priority"] = [n for n in cfg["priority"] if n != a["name"]] or None
