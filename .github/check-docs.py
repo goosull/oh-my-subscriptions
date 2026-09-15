@@ -53,6 +53,19 @@ print(f"checked {len(known)} commands against the docs: {', '.join(sorted(known)
 # The two manifests name the same plugin from opposite ends, and `claude plugin install
 # <name>@<marketplace>` needs them to agree. Renaming the plugin means editing both;
 # editing one leaves an install command that resolves to nothing.
+# A whole section can vanish when an edit misses its anchor, and nothing notices while
+# the feature still appears as a name in a list. Three have: the quota warning, the
+# handoff, and every setting key.
+readme_text = (ROOT / "README.md").read_text()
+missing = [c for c in sorted(known) if f"oms {c}" not in readme_text]
+if missing:
+    bad.append(f"README.md: these commands exist and are not mentioned: {', '.join(missing)}")
+for keyset in ("ACCOUNT_KEYS", "GLOBAL_KEYS"):
+    block = re.search(rf"{keyset} = \{{(.*?)\n\}}", OMS.read_text(), re.S)
+    for key in re.findall(r'"(\w+)":', block.group(1) if block else ""):
+        if f"`{key}`" not in readme_text:
+            bad.append(f"README.md: `{key}` is a setting nothing documents")
+
 manifest = json.loads((ROOT / ".claude-plugin" / "plugin.json").read_text())
 market = json.loads((ROOT / ".claude-plugin" / "marketplace.json").read_text())
 listed = [e["name"] for e in market.get("plugins", [])]

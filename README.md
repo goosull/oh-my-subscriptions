@@ -286,6 +286,42 @@ oms auto codex --handoff          # works across vendors too, it is only text
 
 `oms handoff -` takes a brief on stdin if you would rather write it yourself.
 
+## Settings
+
+One vocabulary, translated into each provider's own spelling at launch. `oms set` is the
+only thing that writes a setting; `oms config` shows them all and what each account will
+launch as.
+
+```bash
+oms set all effort=high           # --effort high for claude, -c model_reasoning_effort for codex
+oms set codex-main model=gpt-5.3-codex
+oms set codex-main size=5000      # so the pick order knows which pool is smaller
+oms set block_at=90               # global
+oms set codex-main args=          # an empty value clears any key
+```
+
+| per account | |
+|---|---|
+| `model` | that provider's own model name |
+| `effort` | `low` `medium` `high` `xhigh` `max`, and `minimal` on codex |
+| `context` | context window in tokens, where the provider takes one |
+| `size` | how big the plan's pool is, for ordering and for percentages |
+| `resets_on` | day of month the plan's credits reset |
+| `paid_overflow` | `yes` if hitting the ceiling on this account is charged |
+| `block_at` | override the global threshold for this account |
+| `args` | extra provider flags, appended raw, for anything not covered |
+| `name` | what the account is called, same as `oms rename` |
+
+| global | |
+|---|---|
+| `block_at` | percentage at which an account that can bill is refused |
+| `warn_at` | percentage at which the hook offers a handoff |
+| `priority` | explicit pick order, or `auto` |
+
+A key the provider has no flag for is refused when you set it, rather than stored and
+silently dropped at launch — claude takes its context window from the model, so
+`context` is a codex setting only.
+
 ## The paid-credit guard
 
 An account is blocked when **paid overflow is on for it AND usage is at or above
@@ -317,14 +353,21 @@ not this tool.
 ## Commands
 
 ```
-oms login <provider> [<name>]        install if missing, log in, name it
-oms add <name> <provider> [--dir PATH] [--paid-overflow yes|no]
+oms login <provider> [<name>]        install if missing, log in, name, prime it
 oms remove <name> [--purge]          unregister an account
+oms add <name> <provider> [--dir PATH] [--paid-overflow yes|no]
 oms install                          wire usage recording into ~/.claude/settings.json
-oms status                           what every account has left
+oms status [--json]                  what every account has left
+oms doctor                           check the wiring that fails silently
 oms run [--force] <name> [args...]   launch one account
-oms auto <provider> [args...]        launch the freest account that can't bill you
+oms auto <provider> [args...]        launch the best account that can't bill you
+oms auto <provider> --dry-run        say which one, and launch nothing
 oms rename <old> <new>               rename an account, keeping its usage history
+oms priority [<name>... | --auto]    show or set the order `oms auto` picks in
+oms config                           every setting, global and per account
+oms set [<account>] key=value ...    change any of them
+oms handoff [- | --clear]            the brief carried into the next session
+oms run <name> --handoff             launch carrying that brief as the first prompt
 oms env <name>                       print the export line for a shell
 ```
 
