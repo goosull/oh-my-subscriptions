@@ -135,7 +135,7 @@ for Claude routes. Install the npm beta, then restart Pi:
 pi install npm:oh-my-subscriptions@beta
 ```
 
-To pin this release, use `npm:oh-my-subscriptions@0.32.0-beta.5` instead.
+To pin this release, use `npm:oh-my-subscriptions@0.32.0-beta.6` instead.
 
 Automatic routing is off until explicitly configured. Your default model and
 credentials are not changed by installation. This beta has offline tests and
@@ -143,20 +143,20 @@ extension-loading checks, but no verified live subscription/billing run yet.
 
 For local development only: `npm ci --ignore-scripts`, then `pi -e .`.
 
-A compact account meter appears on Pi's bottom status line at startup and refreshes
-every 60 seconds and after agent runs, for example:
+A Claude-Code-style usage strip appears immediately above Pi's editor at startup and
+refreshes every 60 seconds and after agent runs. Its first row shows the active model,
+thinking level and context remaining; each following row is one account, with quota
+windows in shortest-to-longest columns. The active account is highlighted when a
+confirmed Pi route identifies it.
 
-```text
-OMS codex-pro20 26% · kiro ≥0% · !codex-work 99% · !claude-work ~195% · /oms
-```
-
-`!` means blocked, `~` means stale, `≥` means a lower-bound reading. Errors display `?`,
-never zero. `/oms` shows the full per-window table with reading age and billing risk.
+`!` means blocked, `~` means stale, and `≥` means a lower-bound reading. Missing windows
+leave their column empty; errors are named rather than displayed as zero. `/oms` shows
+the full per-window table with reading age and billing risk.
 No routing setup is needed just to see usage.
 
 All hosts use `~/.oms/config.json` (or `$OMS_HOME/config.json`), regardless of working
-folder or Pi configuration directory. Set global `usage_display` with `oms set usage_display=status` (the default); use
-`widget` for the earlier multi-line panel or `off` to hide it. The legacy
+folder or Pi configuration directory. Set global `usage_display`: `widget` is the default rich strip, `status` is the compact
+one-line footer, and `off` hides usage UI. The legacy
 `usage_widget` yes/no setting remains compatible. Configure `usage_refresh_seconds`
 with `oms set usage_refresh_seconds=60` (range 15–3600). Running Pi instances pick these
 settings up at the next refresh. These are shared OMS settings; other host integrations

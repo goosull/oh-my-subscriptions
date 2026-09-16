@@ -29,8 +29,8 @@ test("startup widget works without routing; refresh observes global display sett
     registerCommand() {},
     exec: async () => { calls++; return { code: fail ? 1 : 0, stdout: JSON.stringify({ accounts: [], usage_display: display, usage_refresh_seconds: 15 }) }; },
   } as any);
-  const ctx: any = { hasUI: true, ui: {
-    setWidget: (_name: string, lines: any) => widgets.push(lines),
+  const ctx: any = { hasUI: true, getContextUsage: () => undefined, ui: {
+    setWidget: (_name: string, value: any) => widgets.push(value),
     setStatus: (_name: string, text: any) => statuses.push(text), notify() {},
   } };
   try {
@@ -40,7 +40,9 @@ test("startup widget works without routing; refresh observes global display sett
     expect(widgets.at(-1)).toBeUndefined();
     display = "widget";
     events.agent_end(); await new Promise(r => setTimeout(r, 10));
-    expect(widgets.at(-1)[0]).toContain("No accounts");
+    const factory = widgets.at(-1);
+    const component = factory({}, { fg: (_c: string, text: string) => text, bold: (text: string) => text });
+    expect(component.render(80).at(-1)).toContain("no accounts");
     expect(statuses.at(-1)).toBeUndefined();
     display = "off";
     events.agent_end(); await new Promise(r => setTimeout(r, 10));

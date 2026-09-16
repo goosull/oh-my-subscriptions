@@ -4,7 +4,8 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { createAssistantMessageEventStream, type AssistantMessage, type Provider } from "@earendil-works/pi-ai";
-import { approved, bindings, type Binding, type Snapshot, usageLines, usageStatus } from "./routing.js";
+import { approved, bindings, type Binding, type Snapshot, usageStatus } from "./routing.js";
+import { renderUsagePanel } from "./usage-component.js";
 
 const executable = fileURLToPath(new URL("../bin/oms", import.meta.url));
 const omsHome = () => process.env.OMS_HOME || join(homedir(), ".oms");
@@ -19,6 +20,22 @@ export default function (pi: ExtensionAPI) {
   let latest: Snapshot | undefined;
   let refresh: (() => Promise<void>) | undefined;
   let refreshing = false;
+  const showUsage = (ctx: ExtensionContext, snapshot: Snapshot) => {
+    const display = snapshot.usage_display ?? (snapshot.usage_widget === false ? "off" : "widget");
+    ctx.ui.setStatus("oms-usage", display === "status" ? usageStatus(snapshot) : undefined);
+    if (display !== "widget") { ctx.ui.setWidget("oms-usage", undefined); return; }
+    const activeAccount = routes.find(r => r.provider === ctx.model?.provider && r.model === ctx.model?.id)?.account;
+    ctx.ui.setWidget("oms-usage", (_tui, theme) => ({
+      render: (width: number) => renderUsagePanel(snapshot, {
+        model: ctx.model?.name ?? ctx.model?.id,
+        thinking: ctx.thinkingLevel,
+        contextPercent: ctx.getContextUsage()?.percent,
+        contextWindow: ctx.getContextUsage()?.contextWindow ?? ctx.model?.contextWindow,
+        activeAccount,
+      }, theme, width),
+      invalidate() {},
+    }));
+  };
   const status = async (): Promise<Snapshot> => {
     const result = await pi.exec("python3", [executable, "status", "--json"], { timeout: 30_000 });
     if (result.code !== 0 || result.killed) throw new Error("OMS status failed or timed out");
@@ -50,9 +67,7 @@ export default function (pi: ExtensionAPI) {
       try {
         const snapshot = await status();
         if (!stopped) {
-          const display = snapshot.usage_display ?? (snapshot.usage_widget === false ? "off" : "status");
-          ctx.ui.setWidget("oms-usage", display === "widget" ? usageLines(snapshot) : undefined);
-          ctx.ui.setStatus("oms-usage", display === "status" ? usageStatus(snapshot) : undefined);
+          showUsage(ctx, snapshot);
         }
       } catch {
         if (!stopped) {

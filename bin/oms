@@ -592,7 +592,7 @@ def _status_json(cfg):
                       # usage_display; a saved false still means off after upgrading.
                       "usage_widget": cfg.get("usage_widget", True),
                       "usage_display": cfg.get("usage_display",
-                                               "off" if cfg.get("usage_widget") is False else "status"),
+                                               "off" if cfg.get("usage_widget") is False else "widget"),
                       "usage_refresh_seconds": cfg.get("usage_refresh_seconds", 60),
                       "pi_auto": cfg.get("pi_auto")}, indent=2))
 
