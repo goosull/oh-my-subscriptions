@@ -1,5 +1,22 @@
 export interface Binding { account: string; provider: "openai-codex" | "claude-bridge"; model: string }
-export interface Snapshot { accounts: { name: string; vendor: string; available: boolean; blocked?: string | null; reason?: string; stale?: boolean }[] }
+export interface Snapshot {
+  usage_widget?: boolean; usage_refresh_seconds?: number; pi_auto?: boolean | null;
+  accounts: { name: string; vendor: string; available: boolean; blocked?: string | null;
+    reason?: string; stale?: boolean; age_seconds?: number; floor?: boolean; pays_on_overflow?: boolean;
+    windows?: { window: string; used_percent: number }[] }[];
+}
+
+export function usageLines(snapshot: Snapshot): string[] {
+  if (!snapshot.accounts.length) return ["OMS · No accounts registered — run oms login <provider>"];
+  const clean = (text: string) => text.replace(/[\x00-\x1f\x7f-\x9f]/g, " ");
+  return ["OMS · account usage (used %, not remaining) · /oms", ...snapshot.accounts.map(a => {
+    const usage = a.reason ? clean(a.reason) : (a.windows ?? []).map(w =>
+      `${clean(w.window)} ${a.floor ? ">=" : ""}${w.used_percent.toFixed(0)}%`).join(" · ") || "usage unknown";
+    const age = a.age_seconds == null ? "" : ` · ${Math.max(0, Math.floor(a.age_seconds / 60))}m ago`;
+    const billing = a.blocked ? " · BLOCKED" : a.pays_on_overflow ? " · paid overflow ON" : "";
+    return `${clean(a.name)} (${clean(a.vendor)}) · ${usage}${age}${a.stale ? " · STALE" : ""}${billing}`;
+  })];
+}
 export function bindings(value: unknown): Binding[] {
   if (!Array.isArray(value) || !value.length) throw new Error("OMS routes must be a nonempty array");
   const seen = new Set<string>();

@@ -570,7 +570,7 @@ def _status_json(cfg):
         else:
             b = blocked(a, u, cfg["block_at"])
             row.update(available=not b and not stale(u), blocked=b, stale=stale(u),
-                       plan=u.get("plan"),
+                       plan=u.get("plan"), age_seconds=u.get("age"),
                        used_percent=u["pct"],
                        # named, so a consumer never has to work out which is which -
                        # the mistake this file kept making internally
@@ -587,7 +587,10 @@ def _status_json(cfg):
                              [float("inf") if k is None else k for k in r.get("key") or [9]]))
     print(json.dumps({"block_at": cfg["block_at"],
                       "warn_at": cfg.get("warn_at", min(cfg["block_at"], 95) - 10),
-                      "priority": cfg.get("priority"), "accounts": rows}, indent=2))
+                      "priority": cfg.get("priority"), "accounts": rows,
+                      "usage_widget": cfg.get("usage_widget", True),
+                      "usage_refresh_seconds": cfg.get("usage_refresh_seconds", 60),
+                      "pi_auto": cfg.get("pi_auto")}, indent=2))
 
 
 def cmd_add(cfg, args):
@@ -770,6 +773,9 @@ def launch_flags(acct):
 
 
 GLOBAL_KEYS = {
+    "usage_widget": "show account usage in host integrations (yes/no; default yes)",
+    "usage_refresh_seconds": "usage UI refresh interval, 15-3600 seconds (default 60)",
+    "pi_auto": "enable Pi automatic routing globally (yes/no; confirmed bindings required)",
     "block_at": "default %% at which an account that can bill you is blocked",
     "warn_at": "%% at which the hook offers a handoff (default: block_at - 10)",
     "priority": "comma-separated pick order, or 'auto'",
@@ -793,6 +799,14 @@ def _coerce(key, val):
     if key in ("block_at", "warn_at"):
         if not val.lstrip("-").isdigit():
             die(f"{key} takes a number, got {val!r}")
+        return int(val)
+    if key in ("usage_widget", "pi_auto"):
+        if val.lower() not in ("yes", "no", "true", "false", "1", "0"):
+            die(f"{key} takes yes or no")
+        return val.lower() in ("yes", "true", "1")
+    if key == "usage_refresh_seconds":
+        if not val.isdigit() or not 15 <= int(val) <= 3600:
+            die("usage_refresh_seconds takes 15-3600 seconds")
         return int(val)
     if key == "paid_overflow":
         return val.lower() in ("yes", "true", "1", "on")
@@ -1477,6 +1491,9 @@ def selftest():
         assert _s.day == _day and _e.day == _day, "a period must start and end on its day"
         assert _s <= _dt.datetime.now(_dt.timezone.utc) < _e, "today must fall inside it"
         assert 27 <= (_e - _s).days <= 32, f"a month, not {(_e - _s).days} days"
+    assert _coerce("usage_widget", "no") is False
+    assert _coerce("pi_auto", "yes") is True
+    assert _coerce("usage_refresh_seconds", "60") == 60
     assert _coerce("block_at", "90") == 90 and _coerce("paid_overflow", "no") is False
     assert _coerce("args", "--model opus") == ["--model", "opus"]
     assert _coerce("args", "") is None and _coerce("priority", "auto") is None

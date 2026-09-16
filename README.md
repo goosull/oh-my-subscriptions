@@ -135,7 +135,7 @@ for Claude routes. Install the npm beta, then restart Pi:
 pi install npm:oh-my-subscriptions@beta
 ```
 
-To pin this release, use `npm:oh-my-subscriptions@0.32.0-beta.3` instead.
+To pin this release, use `npm:oh-my-subscriptions@0.32.0-beta.4` instead.
 
 Automatic routing is off until explicitly configured. Your default model and
 credentials are not changed by installation. This beta has offline tests and
@@ -143,8 +143,17 @@ extension-loading checks, but no verified live subscription/billing run yet.
 
 For local development only: `npm ci --ignore-scripts`, then `pi -e .`.
 
-Use `/oms`, `/oms priority`, or `/oms config` to inspect subscriptions through the
-bundled CLI. The package loads `pi-claude-bridge` for Claude; Codex uses Pi's native
+An account usage widget appears at startup and refreshes every 60 seconds and after
+agent runs. It shows every account's windows, reading age, staleness, and billing risk.
+Errors are shown as unavailable, never as zero usage. Use `/oms`, `/oms priority`, or
+`/oms config` for details. No routing setup is needed just to see usage.
+
+All hosts use `~/.oms/config.json` (or `$OMS_HOME/config.json`), regardless of working
+folder or Pi configuration directory. Set `usage_widget` with `oms set usage_widget=no`
+to hide the widget, or `usage_refresh_seconds` with `oms set usage_refresh_seconds=60`
+(range 15–3600). Running Pi instances pick these settings up at the next refresh.
+These are shared OMS settings; other host integrations can consume them from
+`oms status --json` but must implement their own UI. The package loads `pi-claude-bridge` for Claude; Codex uses Pi's native
 `openai-codex` provider. No OMP runtime, gateway, or extra credential database is used.
 The Claude Code plugin remains independent and unchanged.
 
@@ -152,16 +161,19 @@ The Claude Code plugin remains independent and unchanged.
 
 First confirm that your Pi Codex login and your Claude Code login are the exact
 accounts named in OMS. OMS cannot infer this from account names. Create
-`~/.pi/agent/oms.json` (or under `PI_CODING_AGENT_DIR`):
+the `pi` section in `~/.oms/config.json`, preserving existing accounts and settings
+(the following is a fragment, NOT a replacement for the file):
 
 ```json
 {
-  "enabled": false,
-  "accountBindingsConfirmed": true,
-  "routes": [
-    { "account": "your-codex", "provider": "openai-codex", "model": "gpt-5.4" },
-    { "account": "your-claude", "provider": "claude-bridge", "model": "claude-sonnet-4-6" }
-  ]
+  "pi_auto": false,
+  "pi": {
+    "accountBindingsConfirmed": true,
+    "routes": [
+      { "account": "your-codex", "provider": "openai-codex", "model": "gpt-5.4" },
+      { "account": "your-claude", "provider": "claude-bridge", "model": "claude-sonnet-4-6" }
+    ]
+  }
 }
 ```
 
@@ -171,8 +183,11 @@ The selected native model remains visible in Pi; no synthetic proxy model is use
 Wrapped provider calls recheck OMS immediately before forwarding, including tool-result
 continuations. If an account becomes blocked mid-turn, the request stops; submit again
 to select another approved route. Upstream failures are not replayed automatically.
-`/oms auto off` disables selection AND request guards for this session. Set `enabled`
-to true in the file to opt in at startup.
+`/oms auto off` disables selection AND request guards. Both on/off commands save
+`pi_auto` globally; other configured Pi instances adopt it at refresh. It can also be
+set with `oms set pi_auto=yes`. Changes to account bindings require `/reload` in each
+Pi instance. Legacy `~/.pi/agent/oms.json` is read only as a fallback when no shared
+`pi` section exists; new settings belong in OMS.
 
 This is provider switching, not same-provider multi-account rotation: one binding per
 provider is allowed, and no credentials are copied or replaced. Confirmation is an

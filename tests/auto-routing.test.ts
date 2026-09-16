@@ -8,12 +8,14 @@ import extension from "../extensions/oms";
 test("native provider selection and send guard: blocked Claude falls back to Codex, no safe route sends nothing", async () => {
   const dir = await mkdtemp(join(tmpdir(), "oms-pi-"));
   const old = process.env.PI_CODING_AGENT_DIR;
-  process.env.PI_CODING_AGENT_DIR = dir;
+  const oldOms = process.env.OMS_HOME;
+  process.env.OMS_HOME = dir;
+  process.env.PI_CODING_AGENT_DIR = join(dir, "different-pi-home");
   try {
-    await writeFile(join(dir, "oms.json"), JSON.stringify({ enabled: true, accountBindingsConfirmed: true, routes: [
+    await writeFile(join(dir, "config.json"), JSON.stringify({ pi_auto: true, pi: { accountBindingsConfirmed: true, routes: [
       { account: "claude", provider: "claude-bridge", model: "claude-sonnet-4-6" },
       { account: "codex", provider: "openai-codex", model: "gpt-5.4" },
-    ] }));
+    ] } }));
     const events: Record<string, Function> = {};
     const models = [
       { provider: "claude-bridge", id: "claude-sonnet-4-6", api: "claude-bridge" },
@@ -58,6 +60,7 @@ test("native provider selection and send guard: blocked Claude falls back to Cod
     events.session_shutdown();
   } finally {
     if (old === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = old;
+    if (oldOms === undefined) delete process.env.OMS_HOME; else process.env.OMS_HOME = oldOms;
     await rm(dir, { recursive: true, force: true });
   }
 });
