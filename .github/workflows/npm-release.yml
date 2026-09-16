@@ -18,7 +18,62 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  build-core:
+    strategy:
+      matrix:
+        include:
+          - { goos: darwin, goarch: arm64 }
+          - { goos: darwin, goarch: amd64 }
+          - { goos: linux, goarch: arm64 }
+          - { goos: linux, goarch: amd64 }
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.release.tag_name || inputs.tag }}
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.26.x"
+      - name: Test core
+        if: matrix.goos == 'linux' && matrix.goarch == 'amd64'
+        working-directory: core
+        run: go test ./...
+      - name: Build core
+        working-directory: core
+        env:
+          CGO_ENABLED: "0"
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          mkdir -p ../dist
+          name="oms-core-${GOOS}-${GOARCH}"
+          go build -trimpath -ldflags='-s -w' -o "../dist/${name}" ./cmd/oms-core
+          (cd ../dist && sha256sum "${name}" > "${name}.sha256")
+      - uses: actions/upload-artifact@v4
+        with:
+          name: core-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/oms-core-*
+          if-no-files-found: error
+
+  upload-core:
+    needs: build-core
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v6
+        with:
+          pattern: core-*
+          path: dist
+          merge-multiple: true
+      - name: Attach verified core binaries
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
+        run: gh release upload "$RELEASE_TAG" dist/* --repo "$GITHUB_REPOSITORY" --clobber
+
   publish:
+    needs: upload-core
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -61,6 +116,7 @@ jobs:
           python3 .github/check-wired.py
           bun test tests
           (cd agent && bun run typecheck && bun test)
-          agent/node_modules/.bin/tsc --noEmit --skipLibCheck --module nodenext --moduleResolution nodenext --target es2022 extensions/oms.ts extensions/routing.ts
+          agent/node_modules/.bin/tsc --noEmit --skipLibCheck --module nodenext --moduleResolution nodenext --target es2022 extensions/*.ts
+          (cd core && go test ./...)
       - name: Publish using npm trusted publishing (OIDC)
         run: npm publish --access public --provenance --tag "${{ steps.version.outputs.dist_tag }}"

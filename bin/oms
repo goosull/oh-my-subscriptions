@@ -20,6 +20,7 @@ if hasattr(sys.stdout, "reconfigure"):
 OMS = Path(os.environ.get("OMS_HOME", Path.home() / ".oms"))
 CFG, USAGE = OMS / "config.json", OMS / "usage"
 DEFAULT_CLAUDE_DIR = Path.home() / ".claude"
+CORE_RELEASE = "0.32.0"
 # Shared from ~/.claude into alt claude profiles so a second account is not a bare install.
 SHARED = ["skills", "plugins", "agents", "commands", "settings.json", "CLAUDE.md", "output-styles"]
 
@@ -1503,6 +1504,39 @@ def cmd_core(cfg, args):
         running = pid > 0 and (os.kill(pid, 0) is None)
     except (OSError, ValueError):
         pid, running = None, False
+    if action == "install":
+        import hashlib, platform, secrets, urllib.request
+        system = {"Darwin": "darwin", "Linux": "linux"}.get(platform.system())
+        arch = {"arm64": "arm64", "aarch64": "arm64", "x86_64": "amd64", "AMD64": "amd64"}.get(platform.machine())
+        if not system or not arch: die(f"core is not available for {platform.system()} {platform.machine()}")
+        asset = f"oms-core-{system}-{arch}"
+        base = os.environ.get("OMS_CORE_RELEASE_BASE") or \
+            f"https://github.com/goosull/oh-my-subscriptions/releases/download/v{CORE_RELEASE}"
+        try:
+            payload = urllib.request.urlopen(base.rstrip("/") + "/" + asset, timeout=120).read()
+            checksum = urllib.request.urlopen(base.rstrip("/") + "/" + asset + ".sha256", timeout=30).read().decode().split()[0]
+        except Exception as error:
+            die(f"core download failed ({error})")
+        if hashlib.sha256(payload).hexdigest() != checksum: die("core checksum verification failed")
+        binary.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        tmp = binary.with_name("." + binary.name + f".{os.getpid()}")
+        tmp.write_bytes(payload); os.chmod(tmp, 0o700); tmp.replace(binary)
+        root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        for token_file in (facade, management, root / "service.token"):
+            if not token_file.exists():
+                token_file.write_text(secrets.token_urlsafe(48) + "\n"); os.chmod(token_file, 0o600)
+        if not config.exists():
+            config.write_text("\n".join([
+                "host: 127.0.0.1", "port: 8320", f'auth-dir: "{root / "auth"}"',
+                "api-keys:", f'  - "{(root / "service.token").read_text().strip()}"',
+                "remote-management:", "  allow-remote: false",
+                f'  secret-key: "{management.read_text().strip()}"', "  disable-control-panel: true",
+                "plugins:", "  enabled: false", "debug: false", "",
+            ])); os.chmod(config, 0o600)
+        (root / "auth").mkdir(parents=True, exist_ok=True, mode=0o700)
+        print(f"core {CORE_RELEASE} installed for {system}-{arch}")
+        cmd_core(cfg, ["start"])
+        return
     if action == "status":
         print(f"core: {'running' if running else 'stopped'}" + (f" (pid {pid})" if running else ""))
         return
@@ -1677,7 +1711,7 @@ def cmd_core(cfg, args):
         print("core stopped")
         return
     if action != "start":
-        die("usage: oms core [start|stop|status|login <provider> [account]|sync|run <agent> <account>]")
+        die("usage: oms core [install|start|stop|status|login <provider> [account]|sync|run <agent> <account>]")
     if running:
         print(f"core already running (pid {pid})")
         return
@@ -2115,6 +2149,7 @@ USAGE_TEXT = __doc__ + """
   oms handoff [- | --clear]            the brief carried into the next session
   oms run <name> --handoff             launch carrying that brief as the first prompt
   oms env <name>                       print the export line for a shell
+  oms core install                     install verified shared-core binary
   oms core [start|stop|status]         manage the shared provider sidecar
   oms core login <provider> [account]  login, bind, and sync automatically
   oms core sync                        apply OMS guards to core credentials

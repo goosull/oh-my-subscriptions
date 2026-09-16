@@ -126,97 +126,72 @@ or changes the pick order, `/oms:config` sets an account's model or effort,
 to another account.
 
 
-## Inside Pi (beta)
+## Inside Pi
 
-Requires Pi 0.85.1+, Node.js 22+, Python 3, and an authenticated Claude Code login
-for Claude routes. Install the npm beta, then restart Pi:
+Requires Pi 0.85.1+, Node.js 22+, Python 3, and the OMS CLI from the install
+section above. Install the stable Pi package and verified provider core:
 
 ```bash
-pi install npm:oh-my-subscriptions@beta
+pi install npm:oh-my-subscriptions
+oms core install
 ```
 
-To pin this release, use `npm:oh-my-subscriptions@0.32.0-beta.8` instead.
+The core is a loopback-only sidecar built on CLIProxyAPI `v7.3.4`. It owns OAuth,
+token refresh, credential storage, provider protocols and exact-account execution.
+OMS owns account names, priority, quota/billing guards and active/next selection.
+Pi, Claude Code and Codex are thin clients of the same core; they do not implement
+provider login independently.
 
-Automatic routing is off until explicitly configured. Your default model and
-credentials are not changed by installation. This beta has offline tests and
-extension-loading checks, but no verified live subscription/billing run yet.
+Add accounts through the core. Supplying the OMS account name makes login, binding,
+quota refresh and guard sync one operation:
 
-For local development only: `npm ci --ignore-scripts`, then `pi -e .`.
+```bash
+oms core login codex codex-personal
+oms core login claude claude-work
+oms core login google google-work
+```
 
-Pi's normal footer stays in place. On its third line, the current account is shown
-right-aligned directly below Pi's provider/model/thinking text:
+`google` uses the core's supported Antigravity/Google OAuth path. After browser
+authorization, the credential is automatically mapped and synced; no separate sync
+command is required. Existing direct `oms login` profiles remain readable for migration.
+
+Install or change accounts, then restart Pi (or `/reload`). Enable global automatic
+selection with:
+
+```bash
+oms set pi_auto=yes
+```
+
+Before every turn OMS picks the first fresh, unblocked mapped account, pins its exact
+core credential, and refuses hidden fallback. Runtime 429/cooldown state overrides stale
+quota summaries. The exact selection persists across core restarts.
+
+Pi's normal footer stays in place. The right side below provider/model shows:
 
 ```text
-MCP … ponytail …              Current Account: codex-pro20 (78% used 4h 12m)
-                                      Next Account: claude-work (20% used 1h 0m)
+MCP … ponytail …        Current Account: codex-personal (44% used 5d 20h)
+                         Next Account: google-work (0% used 6d 23h)
 ```
 
-The time is until that account's binding quota window resets. `Next Account` prefers the
-next safe, authenticated route in OMS priority order. If none is safe, it still shows
-the next configured route with `BLOCKED`, `STALE`, or unknown status so the reason is
-visible instead of reporting an ambiguous `none available`. Both lines update immediately when OMS selects another route or Pi's model
-changes. The active line marks `BLOCKED`, `STALE`, or unknown status as fresh readings
-arrive. Without a confirmed route mapping it says `unbound` rather than guessing which
-login Pi uses.
-`/oms` shows the full per-account/window table.
-No routing setup is needed just to see usage.
+`BLOCKED`, `STALE`, and unknown states are explicit. `/oms` shows the full table.
+All settings live in `~/.oms/config.json` (or `$OMS_HOME/config.json`) and apply across
+working folders and supported host adapters. Global `pi_auto` controls automatic routing.
+`usage_refresh_seconds` controls refresh cadence. The optional `usage_display` can be
+`widget`, `status`, or `off`; `usage_widget` is its legacy yes/no compatibility alias.
 
-All hosts use `~/.oms/config.json` (or `$OMS_HOME/config.json`), regardless of working
-folder or Pi configuration directory. The active-account footer is always available. The beta compatibility setting
-`usage_display` defaults to `off`; set it to `widget` for the full multi-account strip,
-`status` for the old compact meter, or leave it off. The legacy
-`usage_widget` yes/no setting remains compatible. Configure `usage_refresh_seconds`
-with `oms set usage_refresh_seconds=60` (range 15–3600). Running Pi instances pick these
-settings up at the next refresh. These are shared OMS settings; other host integrations
-can consume them from `oms status --json` but must implement their own UI. The package loads `pi-claude-bridge` for Claude; Codex uses Pi's native
-`openai-codex` provider. No OMP runtime, gateway, or extra credential database is used.
-The Claude Code plugin remains independent and unchanged.
+Core lifecycle and host commands:
 
-### Automatic provider selection (experimental)
-
-First confirm that your Pi Codex login and your Claude Code login are the exact
-accounts named in OMS. OMS cannot infer this from account names. Create
-the `pi` section in `~/.oms/config.json`, preserving existing accounts and settings
-(the following is a fragment, NOT a replacement for the file):
-
-```json
-{
-  "pi_auto": false,
-  "pi": {
-    "accountBindingsConfirmed": true,
-    "routes": [
-      { "account": "your-codex", "provider": "openai-codex", "model": "gpt-5.4" },
-      { "account": "your-claude", "provider": "claude-bridge", "model": "claude-sonnet-4-6" }
-    ]
-  }
-}
+```bash
+oms core status
+oms core start
+oms core stop
+oms core run codex codex-personal
+oms core run claude claude-work
 ```
 
-Use exact model IDs available in Pi. After `/reload`, `/oms auto on` selects a
-fresh, unblocked, authenticated route in OMS priority order before each user turn.
-The selected native model remains visible in Pi; no synthetic proxy model is used.
-Wrapped provider calls recheck OMS immediately before forwarding, including tool-result
-continuations. If an account becomes blocked mid-turn, the request stops; submit again
-to select another approved route. Upstream failures are not replayed automatically.
-`/oms auto off` disables selection AND request guards. Both on/off commands save
-`pi_auto` globally; other configured Pi instances adopt it at refresh. It can also be
-set with `oms set pi_auto=yes`. Changes to account bindings require `/reload` in each
-Pi instance. Legacy `~/.pi/agent/oms.json` is read only as a fallback when no shared
-`pi` section exists; new settings belong in OMS.
-
-This is provider switching, not same-provider multi-account rotation: one binding per
-provider is allowed, and no credentials are copied or replaced. Confirmation is an
-operator assertion, not automated identity verification; recheck it after any login
-change. Do not enable routing if a CLI and Pi/bridge use different accounts or API keys.
-Claude's quota readings still come from Claude Code's OMS status line, not bridge calls;
-missing/stale readings exclude the account. No zero-overage guarantee is possible.
-
-Load the full package once, not a second independent copy of pi-claude-bridge. Reload
-OMS after changing provider extensions; runtime provider re-registration may replace
-wrappers. Concurrent subagent sessions and live subscription billing are not verified.
-The optional AskClaude tool is outside this provider-routing path and should remain
-disabled when relying on OMS guards. OMP is code reference only; the older `agent/`
-experiments are not loaded by this Pi package.
+The core binary is downloaded from the matching GitHub release, verified by SHA-256,
+and stored privately under `~/.oms`. Provider credentials never pass through the Python
+CLI or Pi extension.
 
 ## npm releases
 
@@ -237,33 +212,6 @@ The Actions workflow uses OIDC, not an `NPM_TOKEN` secret. Create a new matching
 version/tag/release or manually dispatch an unpublished version. Bootstrap version
 `0.32.0-beta.2` was published locally; `v0.32.0-beta.1` is GitHub-only.
 
-## Shared provider core (local development)
-
-OMS is migrating provider authentication and transport to one shared sidecar built on
-CLIProxyAPI `v7.3.4`. Provider OAuth, refresh, credential storage and wire protocols stay
-inside that core; OMS supplies priority, billing guards and exact-account selection.
-Claude Code, Codex and Pi become thin clients of the same core instead of implementing
-login separately.
-
-The current local PoC lives in `core/`. It supports an authenticated loopback facade,
-OpenAI Chat/Responses and Anthropic Messages paths, streaming, exact `AuthID` pinning,
-and production CLIProxyAPI lifecycle. Missing or disabled selected accounts fail closed.
-Use `oms core start|stop|status` after the local core binary/config has been installed.
-`oms core login claude|codex|google` delegates browser OAuth to the shared core;
-`google` uses the core's supported Antigravity/Google provider rather than reimplementing
-Gemini CLI login. `oms core sync` disables every unmapped, stale, unknown, or blocked
-credential and enables only explicitly mapped safe OMS accounts. `oms core run
-claude|codex <account>` selects the exact mapped core credential and launches the official
-host against the local facade. Host wrappers do not read provider tokens.
-This is not included in the npm package yet and has not migrated real credentials.
-
-```bash
-cd core
-go test -race ./...
-```
-
-See [`core/README.md`](core/README.md) for the validated boundaries and remaining live-provider steps.
-
 ## Working on it
 
 ```bash
@@ -273,6 +221,7 @@ python3 .github/check-docs.py         # that nothing documents a command the CLI
 python3 .github/check-wired.py        # that nothing was built and left unconnected
 cd agent && bun run typecheck         # the agent, actually typechecked
 cd agent && bun test                  # the loop
+cd core && go test -race ./...        # shared OAuth/account core
 ```
 
 The same checks run in CI. The hook exists because they found a red selftest after it
