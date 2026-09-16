@@ -15,7 +15,10 @@ interface FooterTheme {
   fg(color: "dim" | "warning" | "error" | "success", text: string): string;
 }
 const formatTokens = (n: number) => n < 1000 ? `${n}` : n < 10_000 ? `${(n / 1000).toFixed(1)}k` : n < 1_000_000 ? `${Math.round(n / 1000)}k` : `${(n / 1_000_000).toFixed(n < 10_000_000 ? 1 : 0)}M`;
-const sanitize = (text: string) => text.replace(/[\r\n\t\x00-\x1f\x7f-\x9f]/g, " ").replace(/ +/g, " ").trim();
+// Extension statuses already contain trusted Pi theme ANSI. Match Pi's built-in
+// footer sanitizer: strip layout-breaking whitespace but preserve styling escapes.
+const sanitizeStatus = (text: string) => text.replace(/[\r\n\t]/g, " ").replace(/ +/g, " ").trim();
+const sanitizePlain = (text: string) => text.replace(/[\x00-\x1f\x7f-\x9f]/g, " ").replace(/ +/g, " ").trim();
 const homePath = (cwd: string) => {
   const home = process.env.HOME || process.env.USERPROFILE || homedir();
   const rel = relative(resolve(home), resolve(cwd));
@@ -31,9 +34,9 @@ const align = (left: string, right: string, width: number, theme: FooterTheme) =
 export function accountText(snapshot: Snapshot | undefined, active: string | undefined, theme: FooterTheme): string {
   if (!active) return theme.fg("warning", "OMS account: unbound");
   const account = snapshot?.accounts.find(a => a.name === active);
-  if (!account) return theme.fg("warning", `OMS account: ${sanitize(active)} ?`);
+  if (!account) return theme.fg("warning", `OMS account: ${sanitizePlain(active)} ?`);
   const suffix = account.blocked ? " BLOCKED" : account.stale ? " STALE" : account.reason ? " ?" : "";
-  return theme.fg(account.blocked ? "error" : account.stale || account.reason ? "warning" : "success", `OMS account: ${sanitize(active)}${suffix}`);
+  return theme.fg(account.blocked ? "error" : account.stale || account.reason ? "warning" : "success", `OMS account: ${sanitizePlain(active)}${suffix}`);
 }
 
 export function renderAccountFooter(
@@ -62,7 +65,7 @@ export function renderAccountFooter(
     `${percent}%/${formatTokens(usage?.contextWindow ?? ctx.model?.contextWindow ?? 0)}`].filter(Boolean).join(" ");
   const model = ctx.model ? `${footerData.getAvailableProviderCount() > 1 ? `(${ctx.model.provider}) ` : ""}${ctx.model.id}${ctx.model.reasoning ? ` • ${ctx.thinkingLevel ?? "off"}` : ""}` : "no-model";
   const statuses = [...footerData.getExtensionStatuses()].filter(([key]) => key !== "oms" && key !== "oms-usage")
-    .sort(([a], [b]) => a.localeCompare(b)).map(([, value]) => sanitize(value)).join(" ");
+    .sort(([a], [b]) => a.localeCompare(b)).map(([, value]) => sanitizeStatus(value)).join(" ");
   return [
     truncateToWidth(theme.fg("dim", pwd), width, theme.fg("dim", "...")),
     align(theme.fg("dim", stats), theme.fg("dim", model), width, theme),

@@ -5,7 +5,7 @@ import { accountText, renderAccountFooter } from "../extensions/account-footer";
 const theme = { fg: (_color: string, text: string) => text } as any;
 const footerData = {
   getGitBranch: () => "main", getAvailableProviderCount: () => 2,
-  getExtensionStatuses: () => new Map([["mcp", "MCP 0/15"], ["pony", "ponytail: FULL"]]),
+  getExtensionStatuses: () => new Map([["mcp", "\x1b[38;2;90;128;128mMCP 0/15\x1b[39m"], ["pony", "ponytail: FULL"]]),
   onBranchChange: () => () => {},
 };
 const ctx: any = {
@@ -20,7 +20,8 @@ test("active account is right-aligned below provider/model while existing status
   const lines = renderAccountFooter(ctx, footerData, theme, snapshot, "codex-pro20", 100);
   expect(lines).toHaveLength(3);
   expect(lines[1]).toContain("(openai-codex) gpt-5.6-sol • high");
-  expect(lines[2]).toStartWith("MCP 0/15 ponytail: FULL");
+  expect(lines[2]).toContain("\x1b[38;2;90;128;128mMCP 0/15\x1b[39m");
+  expect(lines[2].replace(/\x1b\[[0-9;]*m/g, "")).toStartWith("MCP 0/15 ponytail: FULL");
   expect(lines[2]).toEndWith("OMS account: codex-pro20");
   expect(lines.every(line => visibleWidth(line) <= 100)).toBe(true);
 });

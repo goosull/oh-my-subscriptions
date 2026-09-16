@@ -1,6 +1,6 @@
 {
   "name": "oh-my-subscriptions",
-  "version": "0.32.0-beta.7",
+  "version": "0.32.0-beta.8",
   "publishConfig": { "access": "public", "tag": "beta" },
   "type": "module",
   "description": "OMS subscription status and experimental provider routing for Pi",

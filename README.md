@@ -135,7 +135,7 @@ for Claude routes. Install the npm beta, then restart Pi:
 pi install npm:oh-my-subscriptions@beta
 ```
 
-To pin this release, use `npm:oh-my-subscriptions@0.32.0-beta.7` instead.
+To pin this release, use `npm:oh-my-subscriptions@0.32.0-beta.8` instead.
 
 Automatic routing is off until explicitly configured. Your default model and
 credentials are not changed by installation. This beta has offline tests and
