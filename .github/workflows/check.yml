@@ -38,6 +38,11 @@ jobs:
         working-directory: agent
       - run: bun test
         working-directory: agent
+      - uses: actions/setup-node@v4
+        with: { node-version: "22" }
+      - run: npm ci --ignore-scripts
+      - run: bun test tests
+      - run: agent/node_modules/.bin/tsc --noEmit --skipLibCheck --module nodenext --moduleResolution nodenext --target es2022 extensions/oms.ts extensions/routing.ts
       - name: the demo and the cost model still run
         run: bun run cost.ts
         working-directory: agent

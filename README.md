@@ -126,6 +126,66 @@ or changes the pick order, `/oms:config` sets an account's model or effort,
 to another account.
 
 
+## Inside Pi (beta)
+
+Requires Pi 0.85.1+, Node.js 22+, Python 3, and an authenticated Claude Code login
+for Claude routes. Install the pinned GitHub prerelease, then restart Pi:
+
+```bash
+pi install git:github.com/goosull/oh-my-subscriptions@v0.32.0-beta.1
+```
+
+Automatic routing is off until explicitly configured. Your default model and
+credentials are not changed by installation. This beta has offline tests and
+extension-loading checks, but no verified live subscription/billing run yet.
+
+For local development only: `npm ci --ignore-scripts`, then `pi -e .`.
+
+Use `/oms`, `/oms priority`, or `/oms config` to inspect subscriptions through the
+bundled CLI. The package loads `pi-claude-bridge` for Claude; Codex uses Pi's native
+`openai-codex` provider. No OMP runtime, gateway, or extra credential database is used.
+The Claude Code plugin remains independent and unchanged.
+
+### Automatic provider selection (experimental)
+
+First confirm that your Pi Codex login and your Claude Code login are the exact
+accounts named in OMS. OMS cannot infer this from account names. Create
+`~/.pi/agent/oms.json` (or under `PI_CODING_AGENT_DIR`):
+
+```json
+{
+  "enabled": false,
+  "accountBindingsConfirmed": true,
+  "routes": [
+    { "account": "your-codex", "provider": "openai-codex", "model": "gpt-5.4" },
+    { "account": "your-claude", "provider": "claude-bridge", "model": "claude-sonnet-4-6" }
+  ]
+}
+```
+
+Use exact model IDs available in Pi. After `/reload`, `/oms auto on` selects a
+fresh, unblocked, authenticated route in OMS priority order before each user turn.
+The selected native model remains visible in Pi; no synthetic proxy model is used.
+Wrapped provider calls recheck OMS immediately before forwarding, including tool-result
+continuations. If an account becomes blocked mid-turn, the request stops; submit again
+to select another approved route. Upstream failures are not replayed automatically.
+`/oms auto off` disables selection AND request guards for this session. Set `enabled`
+to true in the file to opt in at startup.
+
+This is provider switching, not same-provider multi-account rotation: one binding per
+provider is allowed, and no credentials are copied or replaced. Confirmation is an
+operator assertion, not automated identity verification; recheck it after any login
+change. Do not enable routing if a CLI and Pi/bridge use different accounts or API keys.
+Claude's quota readings still come from Claude Code's OMS status line, not bridge calls;
+missing/stale readings exclude the account. No zero-overage guarantee is possible.
+
+Load the full package once, not a second independent copy of pi-claude-bridge. Reload
+OMS after changing provider extensions; runtime provider re-registration may replace
+wrappers. Concurrent subagent sessions and live subscription billing are not verified.
+The optional AskClaude tool is outside this provider-routing path and should remain
+disabled when relying on OMS guards. OMP is code reference only; the older `agent/`
+experiments are not loaded by this Pi package.
+
 ## Working on it
 
 ```bash
