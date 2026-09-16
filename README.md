@@ -129,11 +129,13 @@ to another account.
 ## Inside Pi (beta)
 
 Requires Pi 0.85.1+, Node.js 22+, Python 3, and an authenticated Claude Code login
-for Claude routes. Install the pinned GitHub prerelease, then restart Pi:
+for Claude routes. Install the npm beta, then restart Pi:
 
 ```bash
-pi install git:github.com/goosull/oh-my-subscriptions@v0.32.0-beta.1
+pi install npm:oh-my-subscriptions@beta
 ```
+
+To pin this release, use `npm:oh-my-subscriptions@0.32.0-beta.3` instead.
 
 Automatic routing is off until explicitly configured. Your default model and
 credentials are not changed by installation. This beta has offline tests and
@@ -193,8 +195,7 @@ manual dispatch with an existing `v<version>` tag. It validates and tests that e
 checkout before publishing with provenance. Prerelease versions use npm's `beta` tag;
 stable versions use `latest`. Tag and `package.json` version must match.
 
-One-time setup (not completed by adding the workflow): publish the first npm package
-using a local authenticated CLI, then configure its npm **Trusted Publisher**:
+The npm package is bootstrapped and its **Trusted Publisher** is configured as:
 
 - GitHub owner: `goosull`
 - Repository: `oh-my-subscriptions`
@@ -202,10 +203,9 @@ using a local authenticated CLI, then configure its npm **Trusted Publisher**:
 - Environment: leave empty
 - Allowed actions: enable direct `npm publish` (not only staged publishing)
 
-The Actions workflow uses OIDC, not an `NPM_TOKEN` secret. The local bootstrap publish
-may require npm's interactive 2FA flow; do not disable account security to automate it.
-After linking the publisher, create a new version/tag/release or manually dispatch an
-unpublished version. Existing `v0.32.0-beta.1` is GitHub-only and predates this workflow.
+The Actions workflow uses OIDC, not an `NPM_TOKEN` secret. Create a new matching
+version/tag/release or manually dispatch an unpublished version. Bootstrap version
+`0.32.0-beta.2` was published locally; `v0.32.0-beta.1` is GitHub-only.
 
 ## Working on it
 
