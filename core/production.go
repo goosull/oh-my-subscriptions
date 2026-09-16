@@ -101,7 +101,14 @@ func (c *ProductionCore) RefreshAccounts() []Account {
 		next[name] = Account{ID: auth.Index, Name: name, AuthID: auth.ID, Provider: auth.Provider, Model: models[auth.ID], Disabled: auth.Disabled || auth.Unavailable || auth.Status == coreauth.StatusDisabled || auth.Status == coreauth.StatusError}
 	}
 	c.accounts = next
-	if _, exists := next[c.active]; !exists {
+	activeExists := false
+	for _, account := range next {
+		if account.ID == c.active {
+			activeExists = true
+			break
+		}
+	}
+	if !activeExists {
 		c.active = ""
 	}
 	if c.active == "" {
@@ -133,8 +140,16 @@ func (c *ProductionCore) Models() []CoreModel {
 	return out
 }
 func (c *ProductionCore) Current() (Account, bool) {
+	find := func() (Account, bool) {
+		for _, account := range c.accounts {
+			if account.ID == c.active {
+				return account, true
+			}
+		}
+		return Account{}, false
+	}
 	c.mu.RLock()
-	account, ok := c.accounts[c.active]
+	account, ok := find()
 	c.mu.RUnlock()
 	if ok {
 		return account, true
@@ -142,8 +157,7 @@ func (c *ProductionCore) Current() (Account, bool) {
 	c.RefreshAccounts()
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	account, ok = c.accounts[c.active]
-	return account, ok
+	return find()
 }
 func (c *ProductionCore) Select(name string) error { return c.SelectModel(name, "") }
 func (c *ProductionCore) SelectModel(name, model string) error {
@@ -183,7 +197,7 @@ func (c *ProductionCore) SelectModel(name, model string) error {
 	if account.Model == "" {
 		return fmt.Errorf("model required for account %q", name)
 	}
-	c.active = selectedKey
+	c.active = account.ID
 	return c.persistSelectionLocked(account)
 }
 
@@ -232,7 +246,7 @@ func (c *ProductionCore) restoreSelectionLocked() {
 			if info != nil && info.ID == state.Model {
 				account.Model = state.Model
 				c.accounts[key] = account
-				c.active = key
+				c.active = account.ID
 				return
 			}
 		}

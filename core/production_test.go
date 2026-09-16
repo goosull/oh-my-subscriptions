@@ -70,11 +70,23 @@ func TestProductionAccountsWithSharedEmailDoNotOverwriteEachOther(t *testing.T) 
 		if _, err := manager.Register(context.Background(), &coreauth.Auth{ID: id, Index: index, Label: "same@example.test", Provider: provider, Status: coreauth.StatusActive}); err != nil {
 			t.Fatal(err)
 		}
+		registry.GetGlobalRegistry().RegisterClient(id, provider, []*registry.ModelInfo{{ID: "model"}})
+		defer registry.GetGlobalRegistry().UnregisterClient(id)
 	}
 	core := &ProductionCore{accounts: map[string]Account{}, manager: manager}
 	accounts := core.RefreshAccounts()
 	if len(accounts) != 4 || len(core.accounts) != 4 {
 		t.Fatalf("shared identity accounts were overwritten: %+v", accounts)
+	}
+	if err := core.SelectModel("idx-2", "model"); err != nil {
+		t.Fatal(err)
+	}
+	for range 5 {
+		core.RefreshAccounts()
+	}
+	current, ok := core.Current()
+	if !ok || current.ID != "idx-2" {
+		t.Fatalf("stable selection drifted across duplicate display names: %+v", current)
 	}
 }
 
