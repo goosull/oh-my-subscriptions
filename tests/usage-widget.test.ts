@@ -31,11 +31,11 @@ test("startup widget works without routing; refresh observes global display sett
   } as any);
   const ctx: any = { hasUI: true, getContextUsage: () => undefined, ui: {
     setWidget: (_name: string, value: any) => widgets.push(value),
-    setStatus: (_name: string, text: any) => statuses.push(text), notify() {},
+    setStatus: (_name: string, text: any) => statuses.push(text),
+    setFooter() {}, notify() {},
   } };
   try {
     await events.session_start({}, ctx);
-    expect(statuses[0]).toContain("loading");
     expect(statuses.at(-1)).toContain("no accounts");
     expect(widgets.at(-1)).toBeUndefined();
     display = "widget";

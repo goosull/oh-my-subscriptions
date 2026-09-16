@@ -6,6 +6,7 @@ import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil
 import { createAssistantMessageEventStream, type AssistantMessage, type Provider } from "@earendil-works/pi-ai";
 import { approved, bindings, type Binding, type Snapshot, usageStatus } from "./routing.js";
 import { renderUsagePanel } from "./usage-component.js";
+import { renderAccountFooter } from "./account-footer.js";
 
 const executable = fileURLToPath(new URL("../bin/oms", import.meta.url));
 const omsHome = () => process.env.OMS_HOME || join(homedir(), ".oms");
@@ -20,8 +21,10 @@ export default function (pi: ExtensionAPI) {
   let latest: Snapshot | undefined;
   let refresh: (() => Promise<void>) | undefined;
   let refreshing = false;
+  let activeAccount = process.env.OMS_ACCOUNT || undefined;
+  let requestRender: (() => void) | undefined;
   const showUsage = (ctx: ExtensionContext, snapshot: Snapshot) => {
-    const display = snapshot.usage_display ?? (snapshot.usage_widget === false ? "off" : "widget");
+    const display = snapshot.usage_display ?? "off";
     ctx.ui.setStatus("oms-usage", display === "status" ? usageStatus(snapshot) : undefined);
     if (display !== "widget") { ctx.ui.setWidget("oms-usage", undefined); return; }
     const activeAccount = routes.find(r => r.provider === ctx.model?.provider && r.model === ctx.model?.id)?.account;
@@ -42,6 +45,7 @@ export default function (pi: ExtensionAPI) {
     const data = JSON.parse(result.stdout);
     approved(data, routes); // Validate even when every account is unavailable.
     latest = data;
+    requestRender?.();
     if (configured && typeof data.pi_auto === "boolean") enabled = data.pi_auto;
     return data;
   };
@@ -51,7 +55,8 @@ export default function (pi: ExtensionAPI) {
     for (const route of candidates) {
       const model = ctx.modelRegistry.find(route.provider, route.model);
       if (model && await pi.setModel(model)) {
-        ctx.ui.setStatus("oms", `OMS: ${route.account} → ${route.provider}/${route.model}`);
+        activeAccount = route.account;
+        requestRender?.();
         return;
       }
     }
@@ -60,6 +65,15 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("session_start", async (_event, ctx) => {
     stopped = false;
+    ctx.ui.setFooter((tui, theme, footerData) => {
+      requestRender = () => tui.requestRender();
+      const unsubscribe = footerData.onBranchChange(requestRender);
+      return {
+        dispose: () => { unsubscribe(); requestRender = undefined; },
+        invalidate() {},
+        render: (width: number) => renderAccountFooter(ctx, footerData, theme, latest, activeAccount, width),
+      };
+    });
     refresh = async () => {
       if (stopped || refreshing || !ctx.hasUI) return;
       refreshing = true;
@@ -84,7 +98,6 @@ export default function (pi: ExtensionAPI) {
         }
       }
     };
-    if (ctx.hasUI) ctx.ui.setStatus("oms-usage", "OMS loading usage…");
     await refresh();
     let config;
     try {
@@ -156,6 +169,12 @@ export default function (pi: ExtensionAPI) {
     }
     configured = true;
     enabled = typeof latest?.pi_auto === "boolean" ? latest.pi_auto : config.enabled === true;
+    activeAccount ??= routes.find(r => r.provider === ctx.model?.provider && r.model === ctx.model?.id)?.account;
+    requestRender?.();
+  });
+  pi.on("model_select", (event) => {
+    activeAccount = routes.find(r => r.provider === event.model.provider && r.model === event.model.id)?.account;
+    requestRender?.();
   });
   pi.on("before_agent_start", async (_event, ctx) => {
     if (!enabled) return;
@@ -171,6 +190,7 @@ export default function (pi: ExtensionAPI) {
     stopped = true; clearTimeout(timer); release();
     ctx.ui.setWidget("oms-usage", undefined);
     ctx.ui.setStatus("oms-usage", undefined);
+    ctx.ui.setFooter(undefined);
   });
 
   pi.registerCommand("oms", {
@@ -184,7 +204,7 @@ export default function (pi: ExtensionAPI) {
           const saved = await pi.exec("python3", [executable, "set", `pi_auto=${on ? "yes" : "no"}`], { timeout: 30_000 });
           if (saved.code !== 0 || saved.killed) throw new Error("Could not save global OMS routing setting");
           enabled = on;
-          if (on) await select(ctx); else { release(); ctx.ui.setStatus("oms", undefined); }
+          if (on) await select(ctx); else { release(); activeAccount = undefined; requestRender?.(); }
         } catch (error) { ctx.ui.notify(String(error), "error"); }
         return;
       }

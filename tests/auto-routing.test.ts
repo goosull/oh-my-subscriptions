@@ -35,7 +35,7 @@ test("native provider selection and send guard: blocked Claude falls back to Cod
       s.end(); return s;
     }
     let available = true;
-    const ctx: any = { model: models[2], ui: { notify() {}, setStatus() {}, setWidget() {} }, modelRegistry: {
+    const ctx: any = { model: models[2], ui: { notify() {}, setStatus() {}, setWidget() {}, setFooter() {} }, modelRegistry: {
       getAll: () => models, getProvider: (id: string) => providers.get(id),
       find: (provider: string, id: string) => models.find(m => m.provider === provider && m.id === id),
     } };
