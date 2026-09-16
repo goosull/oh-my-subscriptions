@@ -21,10 +21,12 @@ test("usage renderer distinguishes stale, blocked, missing and lower-bound usage
 });
 
 test("startup widget works without routing; refresh observes global display setting and errors; shutdown stops updates", async () => {
+  const oldOms = process.env.OMS_HOME;
+  process.env.OMS_HOME = `/tmp/oms-widget-test-${process.pid}-${Date.now()}`;
   const events: Record<string, Function> = {};
   const widgets: any[] = [], statuses: any[] = [];
   let display: "status" | "widget" | "off" = "status", fail = false, calls = 0;
-  extension({
+  await extension({
     on: (name: string, handler: Function) => events[name] = handler,
     registerCommand() {},
     exec: async () => { calls++; return { code: fail ? 1 : 0, stdout: JSON.stringify({ accounts: [], usage_display: display, usage_refresh_seconds: 15 }) }; },
@@ -54,5 +56,8 @@ test("startup widget works without routing; refresh observes global display sett
     const before = calls;
     events.agent_end(); await new Promise(r => setTimeout(r, 10));
     expect(calls).toBe(before);
-  } finally { events.session_shutdown({}, ctx); }
+  } finally {
+    events.session_shutdown({}, ctx);
+    if (oldOms === undefined) delete process.env.OMS_HOME; else process.env.OMS_HOME = oldOms;
+  }
 });

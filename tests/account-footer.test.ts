@@ -16,18 +16,36 @@ const ctx: any = {
 };
 
 test("active account is right-aligned below provider/model while existing statuses stay left", () => {
-  const snapshot: any = { accounts: [{ name: "codex-pro20", vendor: "codex", available: true }] };
-  const lines = renderAccountFooter(ctx, footerData, theme, snapshot, "codex-pro20", 100);
-  expect(lines).toHaveLength(3);
+  const snapshot: any = { accounts: [
+    { name: "codex-pro20", vendor: "codex", available: true, used_percent: 78, resets_at: Date.now() / 1000 + 4 * 3600 + 12 * 60 + 30 },
+    { name: "claude", vendor: "claude", available: true, used_percent: 20, resets_at: Date.now() / 1000 + 3630 },
+  ] };
+  const routes: any = [
+    { account: "codex-pro20", provider: "openai-codex", model: "gpt-5.6-sol" },
+    { account: "claude", provider: "claude-bridge", model: "claude-opus-5" },
+  ];
+  const lines = renderAccountFooter(ctx, footerData, theme, snapshot, "codex-pro20", routes, 100);
+  expect(lines).toHaveLength(4);
   expect(lines[1]).toContain("(openai-codex) gpt-5.6-sol • high");
   expect(lines[2]).toContain("\x1b[38;2;90;128;128mMCP 0/15\x1b[39m");
   expect(lines[2].replace(/\x1b\[[0-9;]*m/g, "")).toStartWith("MCP 0/15 ponytail: FULL");
-  expect(lines[2]).toEndWith("OMS account: codex-pro20");
+  expect(lines[2]).toEndWith("Current Account: codex-pro20 (78% used 4h 12m)");
+  expect(lines[3]).toEndWith("Next Account: claude (20% used 1h 0m)");
   expect(lines.every(line => visibleWidth(line) <= 100)).toBe(true);
 });
 
 test("account footer never guesses and reflects live risk markers", () => {
   expect(accountText(undefined, undefined, theme)).toContain("unbound");
-  expect(accountText({ accounts: [{ name: "work", vendor: "codex", available: false, blocked: "x" }] }, "work", theme)).toContain("BLOCKED");
-  expect(accountText({ accounts: [{ name: "work", vendor: "codex", available: false, stale: true }] }, "work", theme)).toContain("STALE");
+  expect(accountText({ accounts: [{ name: "work", vendor: "codex", available: false, blocked: "x", used_percent: 99 }] }, "work", theme)).toContain("BLOCKED");
+  expect(accountText({ accounts: [{ name: "work", vendor: "codex", available: false, stale: true, used_percent: 50 }] }, "work", theme)).toContain("STALE");
+  const blocked: any = { accounts: [
+    { name: "current", vendor: "codex", available: true, used_percent: 10 },
+    { name: "next", vendor: "claude", available: false, blocked: "x", used_percent: 195 },
+  ] };
+  const routes: any = [
+    { account: "current", provider: "openai-codex", model: "gpt" },
+    { account: "next", provider: "claude-bridge", model: "claude" },
+  ];
+  const lines = renderAccountFooter(ctx, footerData, theme, blocked, "current", routes, 100);
+  expect(lines[3]).toContain("Next Account: next (195% used reset ?, BLOCKED)");
 });

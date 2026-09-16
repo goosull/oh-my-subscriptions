@@ -39,7 +39,7 @@ test("native provider selection and send guard: blocked Claude falls back to Cod
       getAll: () => models, getProvider: (id: string) => providers.get(id),
       find: (provider: string, id: string) => models.find(m => m.provider === provider && m.id === id),
     } };
-    extension({ on: (name: string, handler: Function) => events[name] = handler,
+    await extension({ on: (name: string, handler: Function) => events[name] = handler,
       registerCommand() {}, registerProvider: (p: any) => providers.set(p.id, p),
       setModel: async (m: any) => { ctx.model = m; return true; },
       exec: async () => ({ code: 0, stdout: JSON.stringify({ accounts: [

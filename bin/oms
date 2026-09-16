@@ -553,6 +553,26 @@ def cmd_status(cfg, args):
               "\n\nrun it anyway with:  oms run --force <name>" if blocked_any else ""))
 
 
+def _core_bindings(cfg):
+    return [b for b in (cfg.get("core") or {}).get("bindings", [])
+            if b.get("account") and b.get("core_id")]
+
+
+def _core_usage(binding):
+    core_id = re.sub(r"[^A-Za-z0-9_-]", "_", str(binding["core_id"]))
+    f = USAGE / f"core-{core_id}.json"
+    try:
+        d = json.loads(f.read_text())
+        wins = [(w["window"], float(w["used_percent"])) for w in d.get("windows", [])]
+        if not wins: return {"err": d.get("error") or "core quota unavailable"}
+        hot = max(wins, key=lambda item: item[1])
+        return reading(wins, plan=d.get("provider") or "core", resets=d.get("resets_at"),
+                       age=time.time() - d.get("at", 0), paid_on=bool(binding.get("paid_overflow")),
+                       detail="  ".join(f"{label} {pct:.0f}%" for label, pct in wins))
+    except (OSError, ValueError, KeyError):
+        return {"err": "core quota unavailable - run `oms core sync`"}
+
+
 def _status_json(cfg):
     """Machine-readable status, already in pick order and already judged.
 
@@ -582,6 +602,27 @@ def _status_json(cfg):
                        floor=bool(u.get("floor")),
                        key=[None if isinstance(k, float) and k == float("inf") else k
                             for k in sel_key(cfg, a, u)])
+        rows.append(row)
+    known = {row["name"] for row in rows}
+    for binding in _core_bindings(cfg):
+        if binding["account"] in known: continue
+        u = _core_usage(binding)
+        row = {"name": binding["account"], "vendor": binding.get("provider") or "core",
+               "dir": "core:" + str(binding["core_id"]), "bin": "oms-core", "installed": True,
+               "flags": []}
+        if u.get("err"):
+            row.update(available=False, reason=u["err"])
+        else:
+            synthetic = {"name": binding["account"], "paid_overflow": bool(binding.get("paid_overflow"))}
+            b = blocked(synthetic, u, cfg["block_at"])
+            row.update(available=not b and not stale(u), blocked=b, stale=stale(u),
+                       plan=u.get("plan"), age_seconds=u.get("age"), used_percent=u["pct"],
+                       binding={"window": u["binding"][0], "used_percent": u["binding"][1]},
+                       soonest={"window": u["soonest"][0], "used_percent": u["soonest"][1]},
+                       windows=[{"window": w, "used_percent": p} for w, p in u.get("windows") or []],
+                       resets_at=u.get("resets"), pays_on_overflow=u["paid_on"], floor=False,
+                       key=[None if isinstance(k, float) and k == float("inf") else k
+                            for k in (1, *rank(u, synthetic))])
         rows.append(row)
     rows.sort(key=lambda r: (not r.get("available"),
                              [float("inf") if k is None else k for k in r.get("key") or [9]]))
@@ -1435,6 +1476,228 @@ def cmd_env(cfg, args):
     print(f'export {provider(a)["home"]}="{a["dir"]}"')
 
 
+def _bind_core_account(cfg, account_name, row):
+    bindings = [b for b in _core_bindings(cfg) if b.get("account") != account_name]
+    bindings.append({"account": account_name, "core_id": row["auth_index"],
+                     "provider": row.get("provider"), "paid_overflow": True})
+    cfg["core"] = {**(cfg.get("core") or {}), "bindings": bindings}
+    defaults = {"codex": "gpt-5.6-sol", "claude": "claude-sonnet-4-6",
+                "antigravity": "gemini-pro-agent"}
+    routes = [r for r in (cfg.get("pi") or {}).get("routes", []) if r.get("account") != account_name]
+    previous = next((r for r in (cfg.get("pi") or {}).get("routes", []) if r.get("account") == account_name), {})
+    routes.append({"account": account_name, "coreAccount": row["auth_index"],
+                   "provider": "oms-core", "model": previous.get("model") or defaults.get(row.get("provider"), "")})
+    cfg["pi"] = {**(cfg.get("pi") or {}), "accountBindingsConfirmed": True, "routes": routes}
+
+
+def cmd_core(cfg, args):
+    """Manage the shared OMS provider sidecar; provider OAuth remains core-owned."""
+    import signal
+    root = OMS / "core"
+    binary, config = OMS / "bin" / "oms-core", root / "config.yaml"
+    facade, management = root / "facade.token", root / "management.token"
+    pid_file, log_file = root / "oms-core.pid", root / "oms-core.log"
+    action = args[0] if args else "status"
+    try:
+        pid = int(pid_file.read_text())
+        running = pid > 0 and (os.kill(pid, 0) is None)
+    except (OSError, ValueError):
+        pid, running = None, False
+    if action == "status":
+        print(f"core: {'running' if running else 'stopped'}" + (f" (pid {pid})" if running else ""))
+        return
+    if action == "login":
+        if not running: die("core is stopped; run `oms core start`")
+        if len(args) not in (2, 3): die("usage: oms core login <claude|codex|google> [oms-account]")
+        endpoint = {"claude": "anthropic-auth-url", "codex": "codex-auth-url",
+                    "google": "antigravity-auth-url", "gemini": "antigravity-auth-url"}.get(args[1])
+        if not endpoint: die("core login supports: claude, codex, google")
+        import urllib.request, urllib.parse, webbrowser
+        token = management.read_text().strip()
+        def request(path):
+            req = urllib.request.Request("http://127.0.0.1:8320/v0/management/" + path,
+                                         headers={"Authorization": "Bearer " + token})
+            with urllib.request.urlopen(req, timeout=15) as response:
+                return json.load(response)
+        before = {row.get("auth_index") for row in request("auth-files").get("files", [])}
+        result = request(endpoint + "?is_webui=true")
+        if result.get("status") != "ok" or not result.get("url") or not result.get("state"):
+            die("core did not start the OAuth flow")
+        webbrowser.open(result["url"])
+        print(f"complete {args[1]} login in the browser...")
+        state = urllib.parse.quote(result["state"], safe="")
+        for _ in range(600):
+            try: current = request("get-auth-status?state=" + state)
+            except Exception: die(f"{args[1]} login interrupted; retry after core is stable")
+            if current.get("status") == "ok":
+                time.sleep(.5)
+                rows = request("auth-files").get("files", [])
+                created = [row for row in rows if row.get("auth_index") not in before]
+                account_name = args[2] if len(args) == 3 else None
+                provider_name = "antigravity" if args[1] in ("google", "gemini") else args[1]
+                if account_name:
+                    account = find(cfg, account_name) if provider_name != "antigravity" else None
+                    if account and account["vendor"] != provider_name: die(f"{account_name} is not a {provider_name} account")
+                else:
+                    bound = {b.get("account") for b in _core_bindings(cfg)}
+                    candidates = [a["name"] for a in cfg["accounts"]
+                                  if a["vendor"] == provider_name and a["name"] not in bound]
+                    if provider_name == "antigravity" and len(created) == 1: candidates = ["google-work"]
+                    if len(candidates) == 1: account_name = candidates[0]
+                if account_name and len(created) == 1:
+                    _bind_core_account(cfg, account_name, created[0])
+                    save(cfg)
+                    print(f"{args[1]} login complete -> {account_name}")
+                else:
+                    print(f"{args[1]} login complete; credential left unmapped and disabled")
+                cmd_core(cfg, ["sync"])
+                return
+            if current.get("status") == "error":
+                die(f"{args[1]} login failed: {current.get('error', 'unknown error')}")
+            time.sleep(.5)
+        die(f"{args[1]} login timed out")
+    if action == "sync":
+        if not running: die("core is stopped; run `oms core start`")
+        import urllib.request
+        management_token = management.read_text().strip()
+        def api(path, method="GET", payload=None):
+            data = json.dumps(payload).encode() if payload is not None else None
+            headers = {"Authorization": "Bearer " + management_token}
+            if data is not None: headers["Content-Type"] = "application/json"
+            req = urllib.request.Request("http://127.0.0.1:8320/v0/management/" + path,
+                                         data=data, method=method, headers=headers)
+            with urllib.request.urlopen(req, timeout=15) as response: return json.load(response)
+        rows = api("auth-files").get("files", [])
+        bindings = {(b.get("core_id") or ""): b for b in (cfg.get("core") or {}).get("bindings", [])}
+        readings = {a["name"]: (a, u) for a, u in zip(cfg["accounts"], usage_all(cfg["accounts"]))}
+        def refresh_core_quota(row, binding):
+            if row.get("provider") != "antigravity" or not row.get("project_id"): return
+            payload = {"auth_index": row.get("auth_index"), "method": "POST",
+                       "url": "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary",
+                       "header": {"Authorization": "Bearer $TOKEN$", "Content-Type": "application/json",
+                                  "User-Agent": "antigravity/hub/2.8.0 (aidev_client; os_type=darwin; arch=arm64; cl=963137146)"},
+                       "data": json.dumps({"project": row["project_id"]})}
+            try:
+                result = api("api-call", "POST", payload)
+                if result.get("status_code") != 200: return
+                quota = json.loads(result.get("body") or "{}")
+                windows = []
+                resets = []
+                for group in quota.get("groups") or []:
+                    for bucket in group.get("buckets") or []:
+                        if bucket.get("disabled") is True or bucket.get("remainingFraction") is None: continue
+                        source = f"{bucket.get('window', '')} {bucket.get('bucketId', '')} {bucket.get('displayName', '')}".lower()
+                        label = "7d" if "week" in source else "5h" if "5h" in source else "24h"
+                        used = max(0, min(100, (1 - float(bucket["remainingFraction"])) * 100))
+                        reset = None
+                        if bucket.get("resetTime"):
+                            import datetime as dt
+                            reset = dt.datetime.fromisoformat(bucket["resetTime"].replace("Z", "+00:00")).timestamp()
+                            resets.append((used, reset))
+                        windows.append({"window": label, "used_percent": used})
+                if windows:
+                    core_id = re.sub(r"[^A-Za-z0-9_-]", "_", str(binding["core_id"]))
+                    write_json(USAGE / f"core-{core_id}.json",
+                               {"at": time.time(), "provider": row.get("provider"), "windows": windows,
+                                "resets_at": max(resets, default=(0, None))[1]})
+            except (OSError, ValueError, KeyError):
+                pass
+        enabled = disabled = 0
+        for row in rows:
+            binding = bindings.get(row.get("auth_index") or "")
+            pair = readings.get((binding or {}).get("account"))
+            runtime_blocked = bool(row.get("unavailable") or row.get("status") in ("error", "disabled"))
+            if binding and runtime_blocked:
+                core_id = re.sub(r"[^A-Za-z0-9_-]", "_", str(binding["core_id"]))
+                message = str(row.get("status_message") or "provider cooldown/unavailable")
+                write_json(USAGE / f"core-{core_id}.json",
+                           {"at": time.time(), "provider": row.get("provider"),
+                            "error": "core unavailable: " + message[:300]})
+                safe = False
+            elif binding and not pair:
+                refresh_core_quota(row, binding)
+                u = _core_usage(binding)
+                synthetic = {"name": binding["account"], "paid_overflow": bool(binding.get("paid_overflow"))}
+                safe = not u.get("err") and not stale(u) and not blocked(synthetic, u, cfg["block_at"])
+            else:
+                safe = bool(pair and not pair[1].get("err") and not stale(pair[1]) and
+                            not blocked(pair[0], pair[1], cfg["block_at"]))
+            should_disable = not safe
+            if bool(row.get("disabled")) != should_disable:
+                api("auth-files/status", "PATCH", {"name": row.get("name"),
+                                                     "auth_index": row.get("auth_index"),
+                                                     "disabled": should_disable})
+            if should_disable: disabled += 1
+            else: enabled += 1
+        print(f"core policy synced: {enabled} enabled, {disabled} disabled")
+        return
+    if action == "run":
+        if not running: die("core is stopped; run `oms core start`")
+        if len(args) < 3 or args[1] not in ("claude", "codex"):
+            die("usage: oms core run <claude|codex> <oms-account> [agent args...]")
+        host, account_name = args[1], args[2]
+        route = next((r for r in (cfg.get("pi") or {}).get("routes", [])
+                      if r.get("provider") == "oms-core" and r.get("account") == account_name), None)
+        if not route or not route.get("model"):
+            die(f"no oms-core route configured for {account_name}")
+        import urllib.request
+        body = json.dumps({"account": route.get("coreAccount") or account_name,
+                           "model": route["model"]}).encode()
+        req = urllib.request.Request("http://127.0.0.1:8319/v1/oms/account", data=body, method="PUT",
+                                     headers={"Authorization": "Bearer " + facade.read_text().strip(),
+                                              "Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=10): pass
+        except Exception as error:
+            die(f"core account selection failed ({error})")
+        env = dict(os.environ)
+        token = facade.read_text().strip()
+        if host == "claude":
+            for key in ("ANTHROPIC_API_KEY",): env.pop(key, None)
+            env["ANTHROPIC_BASE_URL"] = "http://127.0.0.1:8319"
+            env["ANTHROPIC_AUTH_TOKEN"] = token
+            command = ["claude", "--model", route["model"], *args[3:]]
+        else:
+            env["OMS_CORE_TOKEN"] = token
+            command = ["codex", '-c', 'model_provider="oms"',
+                       '-c', 'model_providers.oms.name="OMS"',
+                       '-c', 'model_providers.oms.base_url="http://127.0.0.1:8319/v1"',
+                       '-c', 'model_providers.oms.env_key="OMS_CORE_TOKEN"',
+                       '-c', 'model_providers.oms.wire_api="responses"',
+                       '-m', route["model"], *args[3:]]
+        os.execvpe(command[0], command, env)
+    if action == "stop":
+        if running:
+            os.kill(pid, signal.SIGTERM)
+            for _ in range(50):
+                try: os.kill(pid, 0)
+                except OSError: break
+                time.sleep(.1)
+        pid_file.unlink(missing_ok=True)
+        print("core stopped")
+        return
+    if action != "start":
+        die("usage: oms core [start|stop|status|login <provider> [account]|sync|run <agent> <account>]")
+    if running:
+        print(f"core already running (pid {pid})")
+        return
+    for path in (binary, config, facade, management):
+        if not path.is_file(): die(f"core is not installed ({path} missing)")
+    env = dict(os.environ)
+    env["OMS_CORE_TOKEN"] = facade.read_text().strip()
+    env["OMS_CORE_MANAGEMENT_TOKEN"] = management.read_text().strip()
+    with log_file.open("a") as log:
+        process = subprocess.Popen([str(binary), "--config", str(config), "--listen", "127.0.0.1:8319"],
+                                   stdin=subprocess.DEVNULL, stdout=log, stderr=log,
+                                   start_new_session=True, env=env)
+    write_json(pid_file, process.pid)
+    # write_json adds JSON; an integer is still valid for int(read_text()).
+    os.chmod(pid_file, 0o600)
+    time.sleep(.2)
+    if process.poll() is not None: die(f"core failed to start; see {log_file}")
+    print(f"core started (pid {process.pid})")
+
+
 def selftest():
     a = {"name": "x"}
     assert blocked(a, {"pct": 99, "paid_on": False}, 95) is None, "plan-only can't bill, never block"
@@ -1828,7 +2091,8 @@ CMDS = {"status": cmd_status, "add": cmd_add, "run": cmd_run, "auto": cmd_auto,
         "login": cmd_login, "rename": cmd_rename, "priority": cmd_priority,
         "config": cmd_config, "set": cmd_set, "remove": cmd_remove, "doctor": cmd_doctor,
         "handoff": cmd_handoff, "check": cmd_check,
-        "statusline": cmd_statusline, "install": cmd_install, "env": cmd_env}
+        "statusline": cmd_statusline, "install": cmd_install, "env": cmd_env,
+        "core": cmd_core}
 USAGE_TEXT = __doc__ + """
   oms login <provider> [<name>]        install if missing, log in, name, prime it
   oms remove <name> [--purge]          unregister an account
@@ -1846,6 +2110,10 @@ USAGE_TEXT = __doc__ + """
   oms handoff [- | --clear]            the brief carried into the next session
   oms run <name> --handoff             launch carrying that brief as the first prompt
   oms env <name>                       print the export line for a shell
+  oms core [start|stop|status]         manage the shared provider sidecar
+  oms core login <provider> [account]  login, bind, and sync automatically
+  oms core sync                        apply OMS guards to core credentials
+  oms core run <agent> <account> ...   launch Claude/Codex through the core
 """
 
 if __name__ == "__main__":

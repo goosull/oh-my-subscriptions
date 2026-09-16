@@ -3,7 +3,7 @@ import { relative, resolve, sep, isAbsolute } from "node:path";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { Snapshot } from "./routing.js";
+import { approved, type Binding, type Snapshot } from "./routing.js";
 
 interface FooterData {
   getGitBranch(): string | null;
@@ -31,12 +31,38 @@ const align = (left: string, right: string, width: number, theme: FooterTheme) =
   return keptLeft + " ".repeat(Math.max(2, width - visibleWidth(keptLeft) - rightWidth)) + right;
 };
 
+const until = (timestamp?: number) => {
+  if (!timestamp) return "reset ?";
+  const seconds = Math.max(0, Math.floor(timestamp - Date.now() / 1000));
+  if (seconds === 0) return "now";
+  if (seconds >= 86400) return `${Math.floor(seconds / 86400)}d ${Math.floor(seconds % 86400 / 3600)}h`;
+  return `${Math.floor(seconds / 3600)}h ${Math.floor(seconds % 3600 / 60)}m`;
+};
+const accountUsage = (snapshot: Snapshot | undefined, name: string) => {
+  const account = snapshot?.accounts.find(a => a.name === name);
+  if (!account) return { text: `${sanitizePlain(name)} (?)`, color: "warning" as const };
+  if (account.reason || account.used_percent == null) return { text: `${sanitizePlain(name)} (usage unknown)`, color: "warning" as const };
+  const percent = `${account.floor ? "≥" : ""}${account.stale ? "~" : ""}${account.used_percent.toFixed(0)}% used`;
+  const suffix = account.blocked ? ", BLOCKED" : account.stale ? ", STALE" : "";
+  return { text: `${sanitizePlain(name)} (${percent} ${until(account.resets_at)}${suffix})`,
+    color: account.blocked ? "error" as const : account.stale ? "warning" as const : "success" as const };
+};
+
 export function accountText(snapshot: Snapshot | undefined, active: string | undefined, theme: FooterTheme): string {
-  if (!active) return theme.fg("warning", "OMS account: unbound");
-  const account = snapshot?.accounts.find(a => a.name === active);
-  if (!account) return theme.fg("warning", `OMS account: ${sanitizePlain(active)} ?`);
-  const suffix = account.blocked ? " BLOCKED" : account.stale ? " STALE" : account.reason ? " ?" : "";
-  return theme.fg(account.blocked ? "error" : account.stale || account.reason ? "warning" : "success", `OMS account: ${sanitizePlain(active)}${suffix}`);
+  if (!active) return theme.fg("warning", "Current Account: unbound");
+  const value = accountUsage(snapshot, active);
+  return theme.fg(value.color, `Current Account: ${value.text}`);
+}
+
+export function nextAccountText(snapshot: Snapshot | undefined, routes: Binding[], active: string | undefined, theme: FooterTheme): string {
+  const safe = snapshot && approved(snapshot, routes).find(route => route.account !== active);
+  // If nothing is currently safe, still show the next configured route and why it
+  // cannot be selected instead of the ambiguous "none available".
+  const next = safe ?? snapshot?.accounts.flatMap(account => routes.filter(route => route.account === account.name))
+    .find(route => route.account !== active);
+  if (!next) return theme.fg("dim", "Next Account: none configured");
+  const value = accountUsage(snapshot, next.account);
+  return theme.fg(value.color === "success" ? "dim" : value.color, `Next Account: ${value.text}`);
 }
 
 export function renderAccountFooter(
@@ -45,6 +71,7 @@ export function renderAccountFooter(
   theme: FooterTheme,
   snapshot: Snapshot | undefined,
   active: string | undefined,
+  routes: Binding[],
   width: number,
 ): string[] {
   let input = 0, output = 0, cacheRead = 0, cacheWrite = 0, cost = 0;
@@ -70,5 +97,6 @@ export function renderAccountFooter(
     truncateToWidth(theme.fg("dim", pwd), width, theme.fg("dim", "...")),
     align(theme.fg("dim", stats), theme.fg("dim", model), width, theme),
     align(statuses, accountText(snapshot, active, theme), width, theme),
+    align("", nextAccountText(snapshot, routes, active, theme), width, theme),
   ];
 }

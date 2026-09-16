@@ -1,9 +1,10 @@
-export interface Binding { account: string; provider: "openai-codex" | "claude-bridge"; model: string }
+export interface Binding { account: string; coreAccount?: string; provider: "openai-codex" | "claude-bridge" | "oms-core"; model: string }
 export interface Snapshot {
   usage_widget?: boolean; usage_display?: "status" | "widget" | "off";
   usage_refresh_seconds?: number; pi_auto?: boolean | null;
   accounts: { name: string; vendor: string; available: boolean; blocked?: string | null;
     reason?: string; stale?: boolean; age_seconds?: number; floor?: boolean; pays_on_overflow?: boolean;
+    used_percent?: number; resets_at?: number;
     windows?: { window: string; used_percent: number }[] }[];
 }
 
@@ -32,17 +33,18 @@ export function bindings(value: unknown): Binding[] {
   if (!Array.isArray(value) || !value.length) throw new Error("OMS routes must be a nonempty array");
   const seen = new Set<string>();
   for (const r of value) {
-    if (!r || typeof r.account !== "string" || !r.account.trim() || typeof r.model !== "string" || !r.model.trim() ||
-      !["openai-codex", "claude-bridge"].includes(r.provider) || seen.has(r.provider)) {
-      throw new Error("Use one explicit account/model binding per supported Pi provider");
+    const key = r?.provider === "oms-core" ? `${r.provider}:${r.account}` : r?.provider;
+    if (!r || typeof r.account !== "string" || !r.account.trim() || (r.coreAccount !== undefined && (typeof r.coreAccount !== "string" || !r.coreAccount.trim())) || typeof r.model !== "string" || !r.model.trim() ||
+      !["openai-codex", "claude-bridge", "oms-core"].includes(r.provider) || !key || seen.has(key)) {
+      throw new Error("Use unique explicit account/model bindings for supported providers");
     }
-    seen.add(r.provider);
+    seen.add(key);
   }
   return value;
 }
 export function approved(snapshot: Snapshot, routes: Binding[]): Binding[] {
   if (!snapshot || !Array.isArray(snapshot.accounts)) throw new Error("Invalid OMS status");
   return snapshot.accounts.flatMap(a => routes.filter(r => r.account === a.name &&
-    a.vendor === (r.provider === "claude-bridge" ? "claude" : "codex") &&
+    (r.provider === "oms-core" || a.vendor === (r.provider === "claude-bridge" ? "claude" : "codex")) &&
     a.available === true && !a.blocked && !a.reason && !a.stale));
 }

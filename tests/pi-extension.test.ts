@@ -1,11 +1,14 @@
 import { expect, test } from "bun:test";
 import extension from "../extensions/oms";
 
-test("Pi entry uses bundled OMS read-only commands, never credentials or providers", async () => {
+test("Pi entry uses bundled OMS read-only commands without a configured core", async () => {
+  const oldOms = process.env.OMS_HOME;
+  process.env.OMS_HOME = `/tmp/oms-pi-command-test-${process.pid}-${Date.now()}`;
   let handler: any;
   const calls: any[] = [], messages: any[] = [], notices: any[] = [];
   let code = 0;
-  extension({
+  try {
+  await extension({
     on() {},
     registerCommand(name: string, options: any) { expect(name).toBe("oms"); handler = options.handler; },
     async exec(...args: any[]) { calls.push(args); return { code, stdout: "status", stderr: "failed" }; },
@@ -24,4 +27,7 @@ test("Pi entry uses bundled OMS read-only commands, never credentials or provide
   await handler("priority", ctx);
   expect(messages.length).toBe(1);
   expect(notices[1]).toEqual(["failed", "error"]);
+  } finally {
+    if (oldOms === undefined) delete process.env.OMS_HOME; else process.env.OMS_HOME = oldOms;
+  }
 });

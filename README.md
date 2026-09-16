@@ -143,16 +143,21 @@ extension-loading checks, but no verified live subscription/billing run yet.
 
 For local development only: `npm ci --ignore-scripts`, then `pi -e .`.
 
-Pi's normal footer stays in place. On its third line, the current OMS account is shown
+Pi's normal footer stays in place. On its third line, the current account is shown
 right-aligned directly below Pi's provider/model/thinking text:
 
 ```text
-MCP … ponytail …                                      OMS account: codex-pro20
+MCP … ponytail …              Current Account: codex-pro20 (78% used 4h 12m)
+                                      Next Account: claude-work (20% used 1h 0m)
 ```
 
-It updates immediately when OMS selects another configured route or Pi's model changes,
-and marks the account `BLOCKED`, `STALE`, or `?` as fresh status arrives. Without a
-confirmed route mapping it says `unbound` rather than guessing which login Pi uses.
+The time is until that account's binding quota window resets. `Next Account` prefers the
+next safe, authenticated route in OMS priority order. If none is safe, it still shows
+the next configured route with `BLOCKED`, `STALE`, or unknown status so the reason is
+visible instead of reporting an ambiguous `none available`. Both lines update immediately when OMS selects another route or Pi's model
+changes. The active line marks `BLOCKED`, `STALE`, or unknown status as fresh readings
+arrive. Without a confirmed route mapping it says `unbound` rather than guessing which
+login Pi uses.
 `/oms` shows the full per-account/window table.
 No routing setup is needed just to see usage.
 
@@ -231,6 +236,33 @@ The npm package is bootstrapped and its **Trusted Publisher** is configured as:
 The Actions workflow uses OIDC, not an `NPM_TOKEN` secret. Create a new matching
 version/tag/release or manually dispatch an unpublished version. Bootstrap version
 `0.32.0-beta.2` was published locally; `v0.32.0-beta.1` is GitHub-only.
+
+## Shared provider core (local development)
+
+OMS is migrating provider authentication and transport to one shared sidecar built on
+CLIProxyAPI `v7.3.4`. Provider OAuth, refresh, credential storage and wire protocols stay
+inside that core; OMS supplies priority, billing guards and exact-account selection.
+Claude Code, Codex and Pi become thin clients of the same core instead of implementing
+login separately.
+
+The current local PoC lives in `core/`. It supports an authenticated loopback facade,
+OpenAI Chat/Responses and Anthropic Messages paths, streaming, exact `AuthID` pinning,
+and production CLIProxyAPI lifecycle. Missing or disabled selected accounts fail closed.
+Use `oms core start|stop|status` after the local core binary/config has been installed.
+`oms core login claude|codex|google` delegates browser OAuth to the shared core;
+`google` uses the core's supported Antigravity/Google provider rather than reimplementing
+Gemini CLI login. `oms core sync` disables every unmapped, stale, unknown, or blocked
+credential and enables only explicitly mapped safe OMS accounts. `oms core run
+claude|codex <account>` selects the exact mapped core credential and launches the official
+host against the local facade. Host wrappers do not read provider tokens.
+This is not included in the npm package yet and has not migrated real credentials.
+
+```bash
+cd core
+go test -race ./...
+```
+
+See [`core/README.md`](core/README.md) for the validated boundaries and remaining live-provider steps.
 
 ## Working on it
 

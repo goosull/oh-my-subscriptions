@@ -7,11 +7,22 @@ import { createAssistantMessageEventStream, type AssistantMessage, type Provider
 import { approved, bindings, type Binding, type Snapshot, usageStatus } from "./routing.js";
 import { renderUsagePanel } from "./usage-component.js";
 import { renderAccountFooter } from "./account-footer.js";
+import { connectCore, type CoreClient } from "./core-client.js";
 
 const executable = fileURLToPath(new URL("../bin/oms", import.meta.url));
 const omsHome = () => process.env.OMS_HOME || join(homedir(), ".oms");
 
-export default function (pi: ExtensionAPI) {
+export default async function (pi: ExtensionAPI) {
+  let core: CoreClient | undefined = await connectCore(pi);
+  if (core) {
+    const models = await core.models();
+    if (models.length) pi.registerProvider("oms-core", {
+      name: "OMS Core", baseUrl: core.baseUrl, apiKey: core.token, api: "openai-completions",
+      models: models.map(model => ({ id:model.id, name:`${model.id} (${model.provider})`, reasoning:true,
+        input:["text"] as const, contextWindow:128000, maxTokens:32768,
+        cost:{ input:0, output:0, cacheRead:0, cacheWrite:0 } })),
+    });
+  }
   let routes: Binding[] = [];
   let enabled = false;
   let configured = false;
@@ -40,6 +51,7 @@ export default function (pi: ExtensionAPI) {
     }));
   };
   const status = async (): Promise<Snapshot> => {
+    if (core) await pi.exec("python3", [executable, "core", "sync"], { timeout: 30_000 });
     const result = await pi.exec("python3", [executable, "status", "--json"], { timeout: 30_000 });
     if (result.code !== 0 || result.killed) throw new Error("OMS status failed or timed out");
     const data = JSON.parse(result.stdout);
@@ -53,6 +65,10 @@ export default function (pi: ExtensionAPI) {
   const select = async (ctx: ExtensionContext) => {
     const candidates = approved(await status(), routes);
     for (const route of candidates) {
+      if (route.provider === "oms-core") {
+        if (!core) continue;
+        try { await core.select(route.coreAccount ?? route.account, route.model); } catch { continue; }
+      }
       const model = ctx.modelRegistry.find(route.provider, route.model);
       if (model && await pi.setModel(model)) {
         activeAccount = route.account;
@@ -71,7 +87,7 @@ export default function (pi: ExtensionAPI) {
       return {
         dispose: () => { unsubscribe(); requestRender = undefined; },
         invalidate() {},
-        render: (width: number) => renderAccountFooter(ctx, footerData, theme, latest, activeAccount, width),
+        render: (width: number) => renderAccountFooter(ctx, footerData, theme, latest, activeAccount, routes, width),
       };
     });
     refresh = async () => {
@@ -177,9 +193,18 @@ export default function (pi: ExtensionAPI) {
     requestRender?.();
   });
   pi.on("before_agent_start", async (_event, ctx) => {
-    if (!enabled) return;
-    try { await select(ctx); }
-    catch (error) { ctx.ui.notify(String(error), "error"); }
+    try {
+      if (!enabled && ctx.model?.provider === "oms-core") {
+        const candidates = approved(await status(), routes).filter(route => route.provider === "oms-core" && route.model === ctx.model?.id);
+        let selected = false;
+        for (const route of candidates) {
+          try { await core?.select(route.coreAccount ?? route.account, route.model); activeAccount = route.account; selected = true; requestRender?.(); break; } catch {}
+        }
+        if (!selected) throw new Error("OMS: no approved core account provides this model");
+        return;
+      }
+      if (enabled) await select(ctx);
+    } catch (error) { ctx.ui.notify(String(error), "error"); }
   });
   const release = () => {
     for (const controller of aborters) controller.abort();
