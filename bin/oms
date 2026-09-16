@@ -1793,6 +1793,11 @@ def selftest():
         "a setting the provider has no flag for must not leak into its argv"
     assert launch_flags({"vendor": "codex", "model": "m", "args": ["--raw"]})[-1] == "--raw"
     assert launch_flags({"vendor": "kiro"})[0] == "chat", "a provider may need a subcommand"
+    core_cfg = {"accounts": [], "pi": {"routes": []}}
+    _bind_core_account(core_cfg, "work", {"auth_index": "core-id", "provider": "codex"})
+    assert core_cfg["core"]["bindings"][0]["account"] == "work"
+    assert core_cfg["pi"]["routes"][0] == {"account": "work", "coreAccount": "core-id",
+                                                   "provider": "oms-core", "model": "gpt-5.6-sol"}
     assert all({"bin", "home", "install", "launch", "prime", "usage", "flags", "efforts",
                 "shared_auth"} <= set(v)
                for v in PROVIDERS.values()), "every provider must fill the whole table"

@@ -318,7 +318,7 @@ func NewHandler(runtime Runtime, token string) (http.Handler, error) {
 			if payload.Stream {
 				chunks, errs, headers, account, err := runtime.ExecuteStream(request.Context(), protocol, payload.Model, body)
 				if err != nil {
-					writeJSON(writer, http.StatusServiceUnavailable, map[string]any{"error": "selected account unavailable"})
+					writeJSON(writer, http.StatusConflict, map[string]any{"error": "selected account unavailable"})
 					return
 				}
 				copyHeaders(writer.Header(), headers)
@@ -378,7 +378,7 @@ func NewHandler(runtime Runtime, token string) (http.Handler, error) {
 			}
 			response, headers, account, err := runtime.Execute(request.Context(), protocol, payload.Model, body)
 			if err != nil {
-				writeJSON(writer, http.StatusServiceUnavailable, map[string]any{"error": "selected account unavailable"})
+				writeJSON(writer, http.StatusConflict, map[string]any{"error": "selected account unavailable"})
 				return
 			}
 			copyHeaders(writer.Header(), headers)

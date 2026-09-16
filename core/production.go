@@ -2,9 +2,12 @@ package omscore
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -28,6 +31,7 @@ type ProductionCore struct {
 	service   *cliproxy.Service
 	started   chan struct{}
 	startOnce sync.Once
+	statePath string
 }
 
 func NewProductionCore(configPath, managementPassword string) (*ProductionCore, error) {
@@ -43,7 +47,7 @@ func NewProductionCore(configPath, managementPassword string) (*ProductionCore, 
 		setter.SetBaseDir(cfg.AuthDir)
 	}
 	manager := coreauth.NewManager(tokenStore, nil, nil)
-	core := &ProductionCore{accounts: make(map[string]Account), manager: manager, handler: handlers.NewBaseAPIHandlers(&cfg.SDKConfig, manager), started: make(chan struct{})}
+	core := &ProductionCore{accounts: make(map[string]Account), manager: manager, handler: handlers.NewBaseAPIHandlers(&cfg.SDKConfig, manager), started: make(chan struct{}), statePath: filepath.Join(filepath.Dir(configPath), "active.json")}
 	service, err := cliproxy.NewBuilder().WithConfig(cfg).WithConfigPath(configPath).WithCoreAuthManager(manager).WithLocalManagementPassword(managementPassword).WithHooks(cliproxy.Hooks{OnAfterStart: func(*cliproxy.Service) { core.RefreshAccounts(); core.startOnce.Do(func() { close(core.started) }) }}).Build()
 	if err != nil {
 		return nil, fmt.Errorf("build core service: %w", err)
@@ -100,6 +104,9 @@ func (c *ProductionCore) RefreshAccounts() []Account {
 	if _, exists := next[c.active]; !exists {
 		c.active = ""
 	}
+	if c.active == "" {
+		c.restoreSelectionLocked()
+	}
 	out := make([]Account, 0, len(next))
 	for _, account := range next {
 		out = append(out, account)
@@ -127,8 +134,15 @@ func (c *ProductionCore) Models() []CoreModel {
 }
 func (c *ProductionCore) Current() (Account, bool) {
 	c.mu.RLock()
-	defer c.mu.RUnlock()
 	account, ok := c.accounts[c.active]
+	c.mu.RUnlock()
+	if ok {
+		return account, true
+	}
+	c.RefreshAccounts()
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	account, ok = c.accounts[c.active]
 	return account, ok
 }
 func (c *ProductionCore) Select(name string) error { return c.SelectModel(name, "") }
@@ -170,7 +184,59 @@ func (c *ProductionCore) SelectModel(name, model string) error {
 		return fmt.Errorf("model required for account %q", name)
 	}
 	c.active = selectedKey
-	return nil
+	return c.persistSelectionLocked(account)
+}
+
+func (c *ProductionCore) persistSelectionLocked(account Account) error {
+	if c.statePath == "" {
+		return nil
+	}
+	data, err := json.Marshal(struct {
+		Account string `json:"account"`
+		Model   string `json:"model"`
+	}{account.ID, account.Model})
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(c.statePath), 0o700); err != nil {
+		return err
+	}
+	tmp := c.statePath + ".tmp"
+	if err := os.WriteFile(tmp, append(data, '\n'), 0o600); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmp, 0o600); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return os.Rename(tmp, c.statePath)
+}
+
+func (c *ProductionCore) restoreSelectionLocked() {
+	if c.statePath == "" {
+		return
+	}
+	var state struct {
+		Account string `json:"account"`
+		Model   string `json:"model"`
+	}
+	data, err := os.ReadFile(c.statePath)
+	if err != nil || json.Unmarshal(data, &state) != nil || state.Account == "" || state.Model == "" {
+		return
+	}
+	for key, account := range c.accounts {
+		if account.ID != state.Account || account.Disabled {
+			continue
+		}
+		for _, info := range registry.GetGlobalRegistry().GetModelsForClient(account.AuthID) {
+			if info != nil && info.ID == state.Model {
+				account.Model = state.Model
+				c.accounts[key] = account
+				c.active = key
+				return
+			}
+		}
+	}
 }
 
 func (c *ProductionCore) Execute(ctx context.Context, protocol, model string, body []byte) ([]byte, http.Header, string, error) {

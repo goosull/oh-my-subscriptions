@@ -28,7 +28,7 @@ OMS_CORE_TOKEN='replace-with-32+-random-characters' \
 The mock sidecar binds only to loopback, requires a bearer token, accepts non-streaming
 `POST /v1/chat/completions`, and owns account selection through authenticated
 `PUT /v1/oms/account`. Client-supplied `auth_id` fields are ignored. End-to-end tests prove
-`mock-a → mock-b` switching and that a selected disabled credential returns 503 without
+`mock-a → mock-b` switching and that a selected disabled credential returns non-retryable 409 without
 calling or falling back to another executor. Real credentials are explicitly disabled.
 
 ## Integration boundary found

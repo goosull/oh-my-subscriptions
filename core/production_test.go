@@ -32,7 +32,8 @@ func TestProductionSelectByStableIDKeepsCanonicalAccountKey(t *testing.T) {
 	if _, err := manager.Register(context.Background(), &coreauth.Auth{ID: account.AuthID, Index: account.ID, Label: account.Name, Provider: account.Provider, Status: coreauth.StatusActive}); err != nil {
 		t.Fatal(err)
 	}
-	core := &ProductionCore{accounts: map[string]Account{}, manager: manager}
+	statePath := filepath.Join(t.TempDir(), "active.json")
+	core := &ProductionCore{accounts: map[string]Account{}, manager: manager, statePath: statePath}
 	if err := core.SelectModel(account.ID, "model"); err != nil {
 		t.Fatal(err)
 	}
@@ -43,6 +44,12 @@ func TestProductionSelectByStableIDKeepsCanonicalAccountKey(t *testing.T) {
 	}
 	if len(core.accounts) != 1 {
 		t.Fatalf("selection created duplicate keys: %+v", core.accounts)
+	}
+	restarted := &ProductionCore{accounts: map[string]Account{}, manager: manager, statePath: statePath}
+	restarted.RefreshAccounts()
+	restored, restoredOK := restarted.Current()
+	if !restoredOK || restored.ID != account.ID || restored.Model != "model" {
+		t.Fatalf("selection was not restored: %+v ok=%v", restored, restoredOK)
 	}
 	auth, _ := manager.GetByID(account.AuthID)
 	auth.Unavailable = true

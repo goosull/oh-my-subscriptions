@@ -114,7 +114,7 @@ func TestMockSidecarPinsPolicyAccountEndToEnd(t *testing.T) {
 	_ = selectedBlocked.Body.Close()
 	before := len(core.ExecutedIDs())
 	blocked := request(http.MethodPost, "/v1/chat/completions", map[string]any{"model": "mock-model", "messages": []any{}}, true)
-	if blocked.StatusCode != http.StatusServiceUnavailable {
+	if blocked.StatusCode != http.StatusConflict {
 		t.Fatalf("blocked route status=%d", blocked.StatusCode)
 	}
 	_ = blocked.Body.Close()
