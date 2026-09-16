@@ -1,14 +1,25 @@
 export interface Binding { account: string; provider: "openai-codex" | "claude-bridge"; model: string }
 export interface Snapshot {
-  usage_widget?: boolean; usage_refresh_seconds?: number; pi_auto?: boolean | null;
+  usage_widget?: boolean; usage_display?: "status" | "widget" | "off";
+  usage_refresh_seconds?: number; pi_auto?: boolean | null;
   accounts: { name: string; vendor: string; available: boolean; blocked?: string | null;
     reason?: string; stale?: boolean; age_seconds?: number; floor?: boolean; pays_on_overflow?: boolean;
     windows?: { window: string; used_percent: number }[] }[];
 }
 
+const clean = (text: string) => text.replace(/[\x00-\x1f\x7f-\x9f]/g, " ");
+
+export function usageStatus(snapshot: Snapshot): string {
+  if (!snapshot.accounts.length) return "OMS no accounts · /oms";
+  return `OMS ${snapshot.accounts.map(a => {
+    const hottest = [...(a.windows ?? [])].sort((x, y) => y.used_percent - x.used_percent)[0];
+    const usage = a.reason ? "?" : hottest ? `${a.floor ? "≥" : ""}${hottest.used_percent.toFixed(0)}%` : "?";
+    return `${a.blocked ? "!" : ""}${clean(a.name)} ${a.stale ? "~" : ""}${usage}`;
+  }).join(" · ")} · /oms`;
+}
+
 export function usageLines(snapshot: Snapshot): string[] {
   if (!snapshot.accounts.length) return ["OMS · No accounts registered — run oms login <provider>"];
-  const clean = (text: string) => text.replace(/[\x00-\x1f\x7f-\x9f]/g, " ");
   return ["OMS · account usage (used %, not remaining) · /oms", ...snapshot.accounts.map(a => {
     const usage = a.reason ? clean(a.reason) : (a.windows ?? []).map(w =>
       `${clean(w.window)} ${a.floor ? ">=" : ""}${w.used_percent.toFixed(0)}%`).join(" · ") || "usage unknown";

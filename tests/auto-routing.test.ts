@@ -35,7 +35,7 @@ test("native provider selection and send guard: blocked Claude falls back to Cod
       s.end(); return s;
     }
     let available = true;
-    const ctx: any = { model: models[2], ui: { notify() {}, setStatus() {} }, modelRegistry: {
+    const ctx: any = { model: models[2], ui: { notify() {}, setStatus() {}, setWidget() {} }, modelRegistry: {
       getAll: () => models, getProvider: (id: string) => providers.get(id),
       find: (provider: string, id: string) => models.find(m => m.provider === provider && m.id === id),
     } };
@@ -57,7 +57,7 @@ test("native provider selection and send guard: blocked Claude falls back to Cod
     expect((await providers.get("openai-codex")!.streamSimple(ctx.model, {} as any).result()).stopReason).toBe("error");
     expect((await providers.get("openai")!.streamSimple(models[2], {} as any).result()).stopReason).toBe("error");
     expect(calls).toBe(1);
-    events.session_shutdown();
+    events.session_shutdown({}, ctx);
   } finally {
     if (old === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = old;
     if (oldOms === undefined) delete process.env.OMS_HOME; else process.env.OMS_HOME = oldOms;

@@ -588,7 +588,11 @@ def _status_json(cfg):
     print(json.dumps({"block_at": cfg["block_at"],
                       "warn_at": cfg.get("warn_at", min(cfg["block_at"], 95) - 10),
                       "priority": cfg.get("priority"), "accounts": rows,
+                      # usage_widget is the beta.4 compatibility toggle. New hosts use
+                      # usage_display; a saved false still means off after upgrading.
                       "usage_widget": cfg.get("usage_widget", True),
+                      "usage_display": cfg.get("usage_display",
+                                               "off" if cfg.get("usage_widget") is False else "status"),
                       "usage_refresh_seconds": cfg.get("usage_refresh_seconds", 60),
                       "pi_auto": cfg.get("pi_auto")}, indent=2))
 
@@ -773,7 +777,8 @@ def launch_flags(acct):
 
 
 GLOBAL_KEYS = {
-    "usage_widget": "show account usage in host integrations (yes/no; default yes)",
+    "usage_display": "account usage UI in host integrations: status, widget, or off",
+    "usage_widget": "legacy show/hide alias (yes/no; prefer usage_display)",
     "usage_refresh_seconds": "usage UI refresh interval, 15-3600 seconds (default 60)",
     "pi_auto": "enable Pi automatic routing globally (yes/no; confirmed bindings required)",
     "block_at": "default %% at which an account that can bill you is blocked",
@@ -800,6 +805,10 @@ def _coerce(key, val):
         if not val.lstrip("-").isdigit():
             die(f"{key} takes a number, got {val!r}")
         return int(val)
+    if key == "usage_display":
+        if val not in ("status", "widget", "off"):
+            die("usage_display takes status, widget, or off")
+        return val
     if key in ("usage_widget", "pi_auto"):
         if val.lower() not in ("yes", "no", "true", "false", "1", "0"):
             die(f"{key} takes yes or no")
@@ -1491,6 +1500,7 @@ def selftest():
         assert _s.day == _day and _e.day == _day, "a period must start and end on its day"
         assert _s <= _dt.datetime.now(_dt.timezone.utc) < _e, "today must fall inside it"
         assert 27 <= (_e - _s).days <= 32, f"a month, not {(_e - _s).days} days"
+    assert _coerce("usage_display", "status") == "status"
     assert _coerce("usage_widget", "no") is False
     assert _coerce("pi_auto", "yes") is True
     assert _coerce("usage_refresh_seconds", "60") == 60

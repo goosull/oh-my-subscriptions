@@ -12,15 +12,15 @@ test("OMS settings persist independently of cwd and are exposed to every host", 
   });
   try {
     await writeFile(join(dir, "config.json"), JSON.stringify({ accounts: [], block_at: 95, pi: { routes: [] } }));
-    expect(run("set", "usage_widget=no", "usage_refresh_seconds=30", "pi_auto=no").exitCode).toBe(0);
+    expect(run("set", "usage_display=status", "usage_refresh_seconds=30", "pi_auto=no").exitCode).toBe(0);
     const snapshot = JSON.parse(run("status", "--json").stdout.toString());
-    expect(snapshot.usage_widget).toBe(false);
+    expect(snapshot.usage_display).toBe("status");
     expect(snapshot.usage_refresh_seconds).toBe(30);
     expect(snapshot.pi_auto).toBe(false);
     const saved = await readFile(join(dir, "config.json"), "utf8");
     expect(JSON.parse(saved).pi).toEqual({ routes: [] });
     expect(run("set", "usage_refresh_seconds=0").exitCode).toBe(1);
-    expect(run("set", "usage_widget=maybe").exitCode).toBe(1);
+    expect(run("set", "usage_display=maybe").exitCode).toBe(1);
     expect(await readFile(join(dir, "config.json"), "utf8")).toBe(saved);
   } finally { await rm(dir, { recursive: true, force: true }); }
 });

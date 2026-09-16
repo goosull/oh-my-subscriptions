@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { createAssistantMessageEventStream, type AssistantMessage, type Provider } from "@earendil-works/pi-ai";
-import { approved, bindings, type Binding, type Snapshot, usageLines } from "./routing.js";
+import { approved, bindings, type Binding, type Snapshot, usageLines, usageStatus } from "./routing.js";
 
 const executable = fileURLToPath(new URL("../bin/oms", import.meta.url));
 const omsHome = () => process.env.OMS_HOME || join(homedir(), ".oms");
@@ -49,9 +49,16 @@ export default function (pi: ExtensionAPI) {
       clearTimeout(timer);
       try {
         const snapshot = await status();
-        if (!stopped) ctx.ui.setWidget("oms-usage", snapshot.usage_widget === false ? undefined : usageLines(snapshot));
+        if (!stopped) {
+          const display = snapshot.usage_display ?? (snapshot.usage_widget === false ? "off" : "status");
+          ctx.ui.setWidget("oms-usage", display === "widget" ? usageLines(snapshot) : undefined);
+          ctx.ui.setStatus("oms-usage", display === "status" ? usageStatus(snapshot) : undefined);
+        }
       } catch {
-        if (!stopped) ctx.ui.setWidget("oms-usage", ["OMS · usage unavailable; /oms to retry (previous readings not current)"]);
+        if (!stopped) {
+          ctx.ui.setWidget("oms-usage", undefined);
+          ctx.ui.setStatus("oms-usage", "OMS usage unavailable · /oms");
+        }
       } finally {
         refreshing = false;
         if (!stopped) {
@@ -62,7 +69,7 @@ export default function (pi: ExtensionAPI) {
         }
       }
     };
-    if (ctx.hasUI) ctx.ui.setWidget("oms-usage", ["OMS · loading account usage…"]);
+    if (ctx.hasUI) ctx.ui.setStatus("oms-usage", "OMS loading usage…");
     await refresh();
     let config;
     try {
@@ -145,7 +152,11 @@ export default function (pi: ExtensionAPI) {
     aborters.clear();
   };
   pi.on("agent_end", () => { release(); void refresh?.(); });
-  pi.on("session_shutdown", () => { stopped = true; clearTimeout(timer); release(); });
+  pi.on("session_shutdown", (_event, ctx) => {
+    stopped = true; clearTimeout(timer); release();
+    ctx.ui.setWidget("oms-usage", undefined);
+    ctx.ui.setStatus("oms-usage", undefined);
+  });
 
   pi.registerCommand("oms", {
     description: "OMS status|priority|config; auto on|off (confirmed provider bindings required)",
