@@ -1,0 +1,66 @@
+name: npm release
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to publish (must match package.json)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: npm-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.release.tag_name || inputs.tag }}
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          registry-url: https://registry.npmjs.org
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - uses: oven-sh/setup-bun@v2
+      - name: Check version and select npm dist-tag
+        id: version
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
+          IS_PRERELEASE: ${{ github.event.release.prerelease }}
+        run: |
+          node --input-type=module <<'JS'
+          import fs from 'node:fs';
+          const {version, private: isPrivate} = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+          if (isPrivate || !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version) || process.env.RELEASE_TAG !== `v${version}`)
+            throw new Error('Release tag must match a publishable package.json version');
+          const prerelease = version.includes('-');
+          if (process.env.IS_PRERELEASE === 'true' && !prerelease)
+            throw new Error('GitHub prereleases must use a prerelease package version');
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `dist_tag=${prerelease ? 'beta' : 'latest'}\n`);
+          JS
+      - run: npm ci --ignore-scripts
+      - run: bun install --frozen-lockfile
+        working-directory: agent
+      - name: Validate release checkout
+        run: |
+          ./bin/oms --selftest
+          python3 .github/check-docs.py
+          python3 .github/check-wired.py
+          bun test tests
+          (cd agent && bun run typecheck && bun test)
+          agent/node_modules/.bin/tsc --noEmit --skipLibCheck --module nodenext --moduleResolution nodenext --target es2022 extensions/oms.ts extensions/routing.ts
+      - name: Publish using npm trusted publishing (OIDC)
+        run: npm publish --access public --provenance --tag "${{ steps.version.outputs.dist_tag }}"

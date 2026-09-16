@@ -186,6 +186,27 @@ The optional AskClaude tool is outside this provider-routing path and should rem
 disabled when relying on OMS guards. OMP is code reference only; the older `agent/`
 experiments are not loaded by this Pi package.
 
+## npm releases
+
+`.github/workflows/npm-release.yml` publishes on GitHub Release **published**, or
+manual dispatch with an existing `v<version>` tag. It validates and tests that exact
+checkout before publishing with provenance. Prerelease versions use npm's `beta` tag;
+stable versions use `latest`. Tag and `package.json` version must match.
+
+One-time setup (not completed by adding the workflow): publish the first npm package
+using a local authenticated CLI, then configure its npm **Trusted Publisher**:
+
+- GitHub owner: `goosull`
+- Repository: `oh-my-subscriptions`
+- Workflow filename: `npm-release.yml`
+- Environment: leave empty
+- Allowed actions: enable direct `npm publish` (not only staged publishing)
+
+The Actions workflow uses OIDC, not an `NPM_TOKEN` secret. The local bootstrap publish
+may require npm's interactive 2FA flow; do not disable account security to automate it.
+After linking the publisher, create a new version/tag/release or manually dispatch an
+unpublished version. Existing `v0.32.0-beta.1` is GitHub-only and predates this workflow.
+
 ## Working on it
 
 ```bash
