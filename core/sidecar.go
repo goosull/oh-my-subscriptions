@@ -301,7 +301,7 @@ func NewHandler(runtime Runtime, token string) (http.Handler, error) {
 				http.Error(writer, "unauthorized", http.StatusUnauthorized)
 				return
 			}
-			request.Body = http.MaxBytesReader(writer, request.Body, 2<<20)
+			request.Body = http.MaxBytesReader(writer, request.Body, 32<<20)
 			body, err := io.ReadAll(request.Body)
 			if err != nil {
 				writeJSON(writer, http.StatusBadRequest, map[string]any{"error": "invalid request"})

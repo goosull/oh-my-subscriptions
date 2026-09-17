@@ -122,11 +122,21 @@ func (c *ProductionCore) RefreshAccounts() []Account {
 }
 
 func (c *ProductionCore) Accounts() []Account { return c.RefreshAccounts() }
+func accountModels(account Account) []*registry.ModelInfo {
+	models := registry.GetGlobalRegistry().GetModelsForClient(account.AuthID)
+	// Disabled credentials are removed from the shared registry. OMS still needs their
+	// provider catalogue so users can configure the model before quota resets.
+	if len(models) == 0 && account.Provider == "claude" {
+		return registry.GetClaudeModels()
+	}
+	return models
+}
+
 func (c *ProductionCore) Models() []CoreModel {
 	seen := make(map[string]bool)
 	out := []CoreModel{}
 	for _, account := range c.RefreshAccounts() {
-		for _, info := range registry.GetGlobalRegistry().GetModelsForClient(account.AuthID) {
+		for _, info := range accountModels(account) {
 			if info == nil {
 				continue
 			}
@@ -182,7 +192,7 @@ func (c *ProductionCore) SelectModel(name, model string) error {
 	}
 	if model != "" {
 		supported := false
-		for _, info := range registry.GetGlobalRegistry().GetModelsForClient(account.AuthID) {
+		for _, info := range accountModels(account) {
 			if info != nil && info.ID == model {
 				supported = true
 				break
@@ -242,7 +252,7 @@ func (c *ProductionCore) restoreSelectionLocked() {
 		if account.ID != state.Account || account.Disabled {
 			continue
 		}
-		for _, info := range registry.GetGlobalRegistry().GetModelsForClient(account.AuthID) {
+		for _, info := range accountModels(account) {
 			if info != nil && info.ID == state.Model {
 				account.Model = state.Model
 				c.accounts[key] = account

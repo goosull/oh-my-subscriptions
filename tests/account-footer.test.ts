@@ -40,12 +40,15 @@ test("account footer never guesses and reflects live risk markers", () => {
   expect(accountText({ accounts: [{ name: "work", vendor: "codex", available: false, stale: true, used_percent: 50 }] }, "work", theme)).toContain("STALE");
   const blocked: any = { accounts: [
     { name: "current", vendor: "codex", available: true, used_percent: 10 },
-    { name: "next", vendor: "claude", available: false, blocked: "x", used_percent: 195 },
+    { name: "later", vendor: "codex", available: false, blocked: "x", used_percent: 100, resets_at: Date.now() / 1000 + 5 * 86400 },
+    { name: "sooner", vendor: "claude", available: false, blocked: "x", used_percent: 195, resets_at: Date.now() / 1000 + 86400 },
   ] };
   const routes: any = [
     { account: "current", provider: "openai-codex", model: "gpt" },
-    { account: "next", provider: "claude-bridge", model: "claude" },
+    { account: "later", provider: "openai-codex", model: "gpt-work" },
+    { account: "sooner", provider: "claude-bridge", model: "claude" },
   ];
   const lines = renderAccountFooter(ctx, footerData, theme, blocked, "current", routes, 100);
-  expect(lines[3]).toContain("Next Account: next (195% used reset ?, BLOCKED)");
+  expect(lines[3]).toContain("Next Account: sooner (195% used");
+  expect(lines[3]).toContain("BLOCKED");
 });

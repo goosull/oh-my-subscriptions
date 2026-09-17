@@ -14,8 +14,8 @@ test("Pi entry uses bundled OMS read-only commands without a configured core", a
     async exec(...args: any[]) { calls.push(args); return { code, stdout: "status", stderr: "failed" }; },
     sendMessage(message: any) { messages.push(message); },
   } as any);
-  const ctx = { ui: { notify: (...args: any[]) => notices.push(args) } };
-  await handler("", ctx);
+  const ctx = { mode:"print", ui: { notify: (...args: any[]) => notices.push(args) } };
+  await handler("status", ctx);
   expect(calls[0][0]).toBe("python3");
   expect(calls[0][1][0]).toEndWith("/bin/oms");
   expect(calls[0][1][1]).toBe("status");

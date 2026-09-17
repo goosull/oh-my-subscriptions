@@ -1,0 +1,76 @@
+name: Bug report
+description: Report a reproducible OMS failure or regression
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug. Remove tokens, email addresses, account IDs, and private paths from all output.
+        Security vulnerabilities must follow SECURITY.md instead of this public form.
+  - type: input
+    id: version
+    attributes:
+      label: OMS version
+      description: Output of `npm view oh-my-subscriptions version`, release tag, or commit.
+      placeholder: 0.32.0
+    validations:
+      required: true
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Affected surface
+      options:
+        - Standalone oms CLI
+        - Pi extension / TUI
+        - Claude Code plugin
+        - Shared OAuth core
+        - Codex host adapter
+        - Documentation or installation
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Minimal reproduction
+      description: Include exact commands or TUI steps. Use fake account names.
+      placeholder: |
+        1. Run ...
+        2. Select ...
+        3. Observe ...
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Redacted diagnostics
+      description: Include relevant `oms doctor`, `oms status`, or test output after removing sensitive data.
+      render: shell
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, architecture, Python/Node/Bun/Go versions, and host CLI versions when relevant.
+      placeholder: macOS 15 arm64, Python 3.13, Pi 0.85.1
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Safety checks
+      options:
+        - label: I removed credentials, tokens, email addresses, account IDs, and private paths.
+          required: true
+        - label: This is not a privately reportable security vulnerability.
+          required: true

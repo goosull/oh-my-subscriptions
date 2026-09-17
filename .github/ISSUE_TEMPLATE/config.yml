@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/goosull/oh-my-subscriptions/security/advisories/new
+    about: Report OAuth, credential, routing, billing-guard, or injection vulnerabilities privately.
+  - name: Usage and setup documentation
+    url: https://github.com/goosull/oh-my-subscriptions#quick-start
+    about: Read installation, Pi integration, provider support, safety, and troubleshooting guidance.

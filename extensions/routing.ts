@@ -1,4 +1,4 @@
-export interface Binding { account: string; coreAccount?: string; provider: "openai-codex" | "claude-bridge" | "oms-core"; model: string }
+export interface Binding { account: string; coreAccount?: string; provider: "openai-codex" | "claude-bridge" | "oms-core"; model: string; effort?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" }
 export interface Snapshot {
   usage_widget?: boolean; usage_display?: "status" | "widget" | "off";
   usage_refresh_seconds?: number; pi_auto?: boolean | null;
@@ -35,6 +35,7 @@ export function bindings(value: unknown): Binding[] {
   for (const r of value) {
     const key = r?.provider === "oms-core" ? `${r.provider}:${r.account}` : r?.provider;
     if (!r || typeof r.account !== "string" || !r.account.trim() || (r.coreAccount !== undefined && (typeof r.coreAccount !== "string" || !r.coreAccount.trim())) || typeof r.model !== "string" || !r.model.trim() ||
+      (r.effort !== undefined && !["off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(r.effort)) ||
       !["openai-codex", "claude-bridge", "oms-core"].includes(r.provider) || !key || seen.has(key)) {
       throw new Error("Use unique explicit account/model bindings for supported providers");
     }
@@ -46,5 +47,7 @@ export function approved(snapshot: Snapshot, routes: Binding[]): Binding[] {
   if (!snapshot || !Array.isArray(snapshot.accounts)) throw new Error("Invalid OMS status");
   return snapshot.accounts.flatMap(a => routes.filter(r => r.account === a.name &&
     (r.provider === "oms-core" || a.vendor === (r.provider === "claude-bridge" ? "claude" : "codex")) &&
-    a.available === true && !a.blocked && !a.reason && !a.stale));
+    a.available === true && !a.blocked && !a.reason && !a.stale))
+    .sort((a, b) => (snapshot.accounts.find(account => account.name === a.account)?.resets_at ?? Infinity) -
+      (snapshot.accounts.find(account => account.name === b.account)?.resets_at ?? Infinity));
 }

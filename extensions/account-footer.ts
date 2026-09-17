@@ -55,11 +55,14 @@ export function accountText(snapshot: Snapshot | undefined, active: string | und
 }
 
 export function nextAccountText(snapshot: Snapshot | undefined, routes: Binding[], active: string | undefined, theme: FooterTheme): string {
-  const safe = snapshot && approved(snapshot, routes).find(route => route.account !== active);
-  // If nothing is currently safe, still show the next configured route and why it
-  // cannot be selected instead of the ambiguous "none available".
-  const next = safe ?? snapshot?.accounts.flatMap(account => routes.filter(route => route.account === account.name))
-    .find(route => route.account !== active);
+  const ordered = routes.filter(route => route.account !== active && snapshot?.accounts.some(account => account.name === route.account))
+    .sort((a, b) => (snapshot?.accounts.find(account => account.name === a.account)?.resets_at ?? Infinity) -
+      (snapshot?.accounts.find(account => account.name === b.account)?.resets_at ?? Infinity));
+  const safeAccounts = new Set(snapshot ? approved(snapshot, routes).map(route => route.account) : []);
+  const safe = ordered.find(route => safeAccounts.has(route.account));
+  // If nothing is currently safe, still show the soonest-resetting configured route and
+  // why it cannot be selected instead of the ambiguous "none available".
+  const next = safe ?? ordered[0];
   if (!next) return theme.fg("dim", "Next Account: none configured");
   const value = accountUsage(snapshot, next.account);
   return theme.fg(value.color === "success" ? "dim" : value.color, `Next Account: ${value.text}`);

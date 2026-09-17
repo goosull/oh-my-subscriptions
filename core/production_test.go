@@ -62,6 +62,28 @@ func TestProductionSelectByStableIDKeepsCanonicalAccountKey(t *testing.T) {
 	}
 }
 
+func TestDisabledClaudeStillExposesConfigurableModels(t *testing.T) {
+	manager := coreauth.NewManager(nil, nil, nil)
+	auth := &coreauth.Auth{ID: "claude-auth", Index: "claude-id", Label: "claude@example.test", Provider: "claude", Status: coreauth.StatusDisabled, Disabled: true}
+	if _, err := manager.Register(context.Background(), auth); err != nil {
+		t.Fatal(err)
+	}
+	core := &ProductionCore{accounts: map[string]Account{}, manager: manager}
+	models := core.Models()
+	for _, wanted := range []string{"claude-opus-5", "claude-fable-5", "claude-fable-5-1"} {
+		found := false
+		for _, model := range models {
+			if model.Provider == "claude" && model.ID == wanted {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("disabled Claude catalogue missing %s", wanted)
+		}
+	}
+}
+
 func TestProductionAccountsWithSharedEmailDoNotOverwriteEachOther(t *testing.T) {
 	manager := coreauth.NewManager(nil, nil, nil)
 	for i, provider := range []string{"antigravity", "claude", "codex", "codex"} {
@@ -91,6 +113,9 @@ func TestProductionAccountsWithSharedEmailDoNotOverwriteEachOther(t *testing.T) 
 }
 
 func TestProductionCoreLifecycleWithoutCredentials(t *testing.T) {
+	if raceEnabled {
+		t.Skip("CLIProxyAPI startup watcher has an upstream race; exact-account tests still run under -race")
+	}
 	servicePort := freePort(t)
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "config.yaml")

@@ -14,7 +14,7 @@ test("native provider selection and send guard: blocked Claude falls back to Cod
   try {
     await writeFile(join(dir, "config.json"), JSON.stringify({ pi_auto: true, pi: { accountBindingsConfirmed: true, routes: [
       { account: "claude", provider: "claude-bridge", model: "claude-sonnet-4-6" },
-      { account: "codex", provider: "openai-codex", model: "gpt-5.4" },
+      { account: "codex", provider: "openai-codex", model: "gpt-5.4", effort: "high" },
     ] } }));
     const events: Record<string, Function> = {};
     const models = [
@@ -23,6 +23,9 @@ test("native provider selection and send guard: blocked Claude falls back to Cod
       { provider: "openai", id: "metered", api: "openai-responses" },
     ];
     let calls = 0;
+    let thinking: string | undefined;
+    let setModelCalls = 0;
+    let omsCommand: any;
     const providers = new Map(models.map(m => [m.provider, {
       id: m.provider, stream: send, streamSimple: send,
     }]));
@@ -40,8 +43,10 @@ test("native provider selection and send guard: blocked Claude falls back to Cod
       find: (provider: string, id: string) => models.find(m => m.provider === provider && m.id === id),
     } };
     await extension({ on: (name: string, handler: Function) => events[name] = handler,
-      registerCommand() {}, registerProvider: (p: any) => providers.set(p.id, p),
-      setModel: async (m: any) => { ctx.model = m; return true; },
+      registerCommand: (name: string, command: any) => { if (name === "oms") omsCommand = command; }, registerProvider: (p: any) => providers.set(p.id, p),
+      setModel: async (m: any) => { setModelCalls++; ctx.model = m; return true; },
+      setThinkingLevel: (level: string) => { thinking = level; },
+      registerShortcut() {},
       exec: async () => ({ code: 0, stdout: JSON.stringify({ accounts: [
         { name: "claude", vendor: "claude", available: false, blocked: "paid overflow" },
         { name: "codex", vendor: "codex", available },
@@ -50,8 +55,15 @@ test("native provider selection and send guard: blocked Claude falls back to Cod
     await events.session_start({}, ctx);
     await events.before_agent_start({}, ctx);
     expect(ctx.model.provider).toBe("openai-codex");
+    expect(thinking).toBe("high");
+    expect(setModelCalls).toBe(1);
     expect((await providers.get("openai-codex")!.streamSimple(ctx.model, {} as any).result()).stopReason).toBe("stop");
     expect(calls).toBe(1);
+    await omsCommand.handler("use claude", ctx);
+    expect(ctx.model.provider).toBe("openai-codex");
+    await omsCommand.handler("use codex", ctx);
+    expect(ctx.model.provider).toBe("openai-codex");
+    await omsCommand.handler("use auto", ctx);
     available = false;
     await events.before_agent_start({}, ctx);
     expect((await providers.get("openai-codex")!.streamSimple(ctx.model, {} as any).result()).stopReason).toBe("error");

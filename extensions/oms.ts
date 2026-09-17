@@ -2,7 +2,8 @@ import { fileURLToPath } from "node:url";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { homedir } from "node:os";
-import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { DynamicBorder, getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { Container, type SelectItem, SelectList, Text } from "@earendil-works/pi-tui";
 import { createAssistantMessageEventStream, type AssistantMessage, type Provider } from "@earendil-works/pi-ai";
 import { approved, bindings, type Binding, type Snapshot, usageStatus } from "./routing.js";
 import { renderUsagePanel } from "./usage-component.js";
@@ -32,7 +33,8 @@ export default async function (pi: ExtensionAPI) {
   let latest: Snapshot | undefined;
   let refresh: (() => Promise<void>) | undefined;
   let refreshing = false;
-  let activeAccount = process.env.OMS_ACCOUNT || undefined;
+  let pinnedAccount = process.env.OMS_ACCOUNT || undefined;
+  let activeAccount = pinnedAccount;
   let requestRender: (() => void) | undefined;
   const showUsage = (ctx: ExtensionContext, snapshot: Snapshot) => {
     const display = snapshot.usage_display ?? "off";
@@ -51,7 +53,16 @@ export default async function (pi: ExtensionAPI) {
     }));
   };
   const status = async (): Promise<Snapshot> => {
-    if (core) await pi.exec("python3", [executable, "core", "sync"], { timeout: 30_000 });
+    if (core) {
+      await pi.exec("python3", [executable, "core", "sync"], { timeout: 30_000 });
+      const models = await core.models();
+      if (models.length) pi.registerProvider("oms-core", {
+        name:"OMS Core", baseUrl:core.baseUrl, apiKey:core.token, api:"openai-completions",
+        models:models.map(model => ({ id:model.id, name:`${model.id} (${model.provider})`, reasoning:true,
+          input:["text"] as const, contextWindow:128000, maxTokens:32768,
+          cost:{ input:0, output:0, cacheRead:0, cacheWrite:0 } })),
+      });
+    }
     const result = await pi.exec("python3", [executable, "status", "--json"], { timeout: 30_000 });
     if (result.code !== 0 || result.killed) throw new Error("OMS status failed or timed out");
     const data = JSON.parse(result.stdout);
@@ -62,22 +73,86 @@ export default async function (pi: ExtensionAPI) {
     return data;
   };
 
+  const pick = async (ctx: ExtensionContext, title: string, items: SelectItem[]) => {
+    if (ctx.mode !== "tui") return undefined;
+    return ctx.ui.custom<string | null>((tui, theme, _keybindings, done) => {
+      const container = new Container();
+      container.addChild(new DynamicBorder((text: string) => theme.fg("accent", text)));
+      container.addChild(new Text(theme.fg("accent", theme.bold(title)), 1, 0));
+      const list = new SelectList(items, Math.min(items.length, 14), {
+        selectedPrefix: text => theme.fg("accent", text),
+        selectedText: text => theme.fg("accent", text),
+        description: text => theme.fg("muted", text),
+        scrollInfo: text => theme.fg("dim", text),
+        noMatch: text => theme.fg("warning", text),
+      });
+      list.onSelect = item => done(item.value);
+      list.onCancel = () => done(null);
+      container.addChild(list);
+      container.addChild(new Text(theme.fg("dim", "↑↓ navigate • type to search • enter select • esc cancel"), 1, 0));
+      container.addChild(new DynamicBorder((text: string) => theme.fg("accent", text)));
+      return {
+        render: (width: number) => container.render(width),
+        invalidate: () => container.invalidate(),
+        handleInput: (data: string) => { list.handleInput(data); tui.requestRender(); },
+      };
+    });
+  };
+
   const select = async (ctx: ExtensionContext) => {
     const candidates = approved(await status(), routes);
-    for (const route of candidates) {
+    const ordered = pinnedAccount ? candidates.filter(route => route.account === pinnedAccount) : candidates;
+    for (const route of ordered) {
       if (route.provider === "oms-core") {
         if (!core) continue;
         try { await core.select(route.coreAccount ?? route.account, route.model); } catch { continue; }
       }
       const model = ctx.modelRegistry.find(route.provider, route.model);
       if (model && await pi.setModel(model)) {
+        if (route.effort) pi.setThinkingLevel(route.effort);
         activeAccount = route.account;
         requestRender?.();
         return;
       }
     }
-    throw new Error("OMS: no approved authenticated route; requests remain blocked");
+    throw new Error(pinnedAccount ? `OMS: ${pinnedAccount} is not currently available` : "OMS: no approved authenticated route; requests remain blocked");
   };
+
+  const configure = async (ctx: ExtensionContext) => {
+    if (ctx.mode !== "tui") { ctx.ui.notify("OMS configuration requires TUI mode", "error"); return; }
+    const snapshot = await status();
+    const coreRoutes = routes.filter(route => route.provider === "oms-core");
+    if (!core || !coreRoutes.length) { ctx.ui.notify("No OMS Core accounts are configured", "warning"); return; }
+    const account = await pick(ctx, "OMS Account", coreRoutes.map(route => {
+      const state = snapshot.accounts.find(item => item.name === route.account);
+      const availability = state?.available ? "available" : state?.blocked ? "BLOCKED" : state?.reason ?? "unavailable";
+      return { value:route.account, label:route.account,
+        description:`${state?.vendor ?? "core"} • ${route.model}${route.effort ? ` • effort:${route.effort}` : ""} • ${availability}` };
+    }));
+    if (!account) return;
+    const route = coreRoutes.find(item => item.account === account)!;
+    const vendor = snapshot.accounts.find(item => item.name === account)?.vendor;
+    const catalog = await core.models();
+    const matching = catalog.filter(model => !vendor || model.provider === vendor);
+    const models = matching.length ? matching : catalog;
+    const model = await pick(ctx, `${account} · Model`, models.map(item => ({
+      value:item.id, label:item.id === route.model ? `${item.id} (current)` : item.id,
+      description:item.provider,
+    })));
+    if (!model) return;
+    const levels = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+    const effort = await pick(ctx, `${account} · Effort`, levels.map(level => ({
+      value:level, label:level === (route.effort ?? "off") ? `${level} (current)` : level,
+    })));
+    if (!effort) return;
+    const saved = await pi.exec("python3", [executable, "set", account, `model=${model}`, `effort=${effort}`], { timeout:30_000 });
+    if (saved.code !== 0 || saved.killed) { ctx.ui.notify(saved.stderr || "Could not save OMS configuration", "error"); return; }
+    route.model = model;
+    route.effort = effort as Binding["effort"];
+    ctx.ui.notify(`Saved global default: ${account} · ${model} · effort:${effort} (current session unchanged)`, "info");
+  };
+
+  pi.registerShortcut?.("ctrl+shift+o", { description:"Configure OMS account, model, and effort", handler:configure });
 
   pi.on("session_start", async (_event, ctx) => {
     stopped = false;
@@ -219,9 +294,10 @@ export default async function (pi: ExtensionAPI) {
   });
 
   pi.registerCommand("oms", {
-    description: "OMS status|priority|config; auto on|off (confirmed provider bindings required)",
+    description: "Configure global defaults; use switches the current Pi session",
     handler: async (args, ctx) => {
-      const command = args.trim() || "status";
+      const command = args.trim();
+      if (!command || command === "config") { await configure(ctx); return; }
       if (command === "auto off" || command === "auto on") {
         const on = command === "auto on";
         if (on && !configured) { ctx.ui.notify("Configure confirmed pi routes in ~/.oms/config.json, then /reload", "error"); return; }
@@ -233,8 +309,36 @@ export default async function (pi: ExtensionAPI) {
         } catch (error) { ctx.ui.notify(String(error), "error"); }
         return;
       }
-      if (!["status", "priority", "config"].includes(command)) {
-        ctx.ui.notify("Usage: /oms [status|priority|config|auto on|auto off]", "error"); return;
+      if (command === "use") {
+        if (ctx.mode !== "tui") { ctx.ui.notify("OMS account switching requires TUI mode", "error"); return; }
+        const snapshot = await status();
+        const available = approved(snapshot, routes);
+        const account = await pick(ctx, "Switch Current Pi Session", available.map(route => ({
+          value:route.account, label:route.account,
+          description:`${route.model}${route.effort ? ` • effort:${route.effort}` : ""}`,
+        })));
+        if (!account) return;
+        pinnedAccount = account;
+        try { await select(ctx); ctx.ui.notify(`Current Pi session switched to ${account}`, "info"); }
+        catch (error) { ctx.ui.notify(String(error), "error"); }
+        return;
+      }
+      if (command === "use auto") {
+        pinnedAccount = undefined;
+        try { await select(ctx); ctx.ui.notify("Current Pi session switched to automatic selection", "info"); }
+        catch (error) { ctx.ui.notify(String(error), "error"); }
+        return;
+      }
+      if (command.startsWith("use ")) {
+        const account = command.slice(4).trim();
+        if (!routes.some(route => route.account === account)) { ctx.ui.notify(`Unknown OMS account: ${account}`, "error"); return; }
+        pinnedAccount = account;
+        try { await select(ctx); ctx.ui.notify(`Current Pi session switched to ${account}`, "info"); }
+        catch (error) { ctx.ui.notify(String(error), "error"); }
+        return;
+      }
+      if (!["status", "priority"].includes(command)) {
+        ctx.ui.notify("Usage: /oms [status|priority|config|use <account>|use auto|auto on|auto off]", "error"); return;
       }
       try {
         const result = await pi.exec("python3", [executable, command], { timeout: 30_000 });

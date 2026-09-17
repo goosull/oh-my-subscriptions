@@ -1,0 +1,51 @@
+name: Feature request
+description: Propose a focused improvement to OMS
+title: "[Feature]: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What workflow is difficult today? Describe the user need before the solution.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+      description: What is the smallest useful change?
+    validations:
+      required: true
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Scope
+      options:
+        - Standalone oms CLI
+        - Pi extension / TUI
+        - Claude Code plugin
+        - Shared OAuth core
+        - Provider or account support
+        - Documentation
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+  - type: textarea
+    id: safety
+    attributes:
+      label: Safety and compatibility impact
+      description: Note any effect on OAuth, billing guards, exact-account routing, existing config, or host compatibility.
+  - type: checkboxes
+    id: terms
+    attributes:
+      label: Checklist
+      options:
+        - label: I searched existing issues and releases for the same request.
+          required: true
+        - label: This request does not depend on bypassing provider limits or policies.
+          required: true

@@ -72,6 +72,15 @@ func TestMockSidecarPinsPolicyAccountEndToEnd(t *testing.T) {
 	}
 	_ = unauthorized.Body.Close()
 
+	large := request(http.MethodPost, "/v1/chat/completions", map[string]any{
+		"model": "mock-model", "messages": []any{map[string]any{"role": "user", "content": string(bytes.Repeat([]byte("x"), 3<<20))}},
+	}, true)
+	if large.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(large.Body)
+		t.Fatalf("large request status=%d body=%s", large.StatusCode, body)
+	}
+	_ = large.Body.Close()
+
 	// A client-supplied auth_id is ignored; only OMS policy's current account reaches the SDK pin.
 	first := request(http.MethodPost, "/v1/chat/completions", map[string]any{"model": "mock-model", "auth_id": "auth-b", "messages": []any{}}, true)
 	if first.StatusCode != http.StatusOK || first.Header.Get("X-OMS-Account") != "a" {
@@ -122,7 +131,7 @@ func TestMockSidecarPinsPolicyAccountEndToEnd(t *testing.T) {
 		t.Fatal("disabled exact account fell back to another credential")
 	}
 
-	want := []string{"auth-a", "auth-b", "auth-b"}
+	want := []string{"auth-a", "auth-a", "auth-b", "auth-b"}
 	got := core.ExecutedIDs()
 	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
 		t.Fatalf("executed auth IDs=%v, want %v", got, want)

@@ -1,16 +1,33 @@
+<div align="center">
+
 # oh-my-subscriptions
 
-One terminal, many AI subscriptions.
+**One terminal for Claude Code, OpenAI Codex, Google Gemini / Antigravity, and Kiro subscriptions.**
 
-You pay for more than one coding plan. Each has its own windows and its own ceiling, and
-you have no idea which one has room left — so you burn one to zero, get cut off
-mid-task, and on the plans that allow it, quietly roll onto metered credit.
+Track AI coding subscription quotas, manage multiple OAuth accounts, choose models and
+reasoning effort, route Pi to a safe account, and block accidental paid overage.
 
-`oms status` shows every plan's remaining headroom in one table. `oms auto` launches
-whichever has the most useful room left. And neither will touch an account that is about
-to bill you.
+[![npm](https://img.shields.io/npm/v/oh-my-subscriptions?style=flat-square&logo=npm)](https://www.npmjs.com/package/oh-my-subscriptions)
+[![CI](https://img.shields.io/github/actions/workflow/status/goosull/oh-my-subscriptions/check.yml?branch=main&style=flat-square&label=tests)](https://github.com/goosull/oh-my-subscriptions/actions/workflows/check.yml)
+[![release](https://img.shields.io/github/v/release/goosull/oh-my-subscriptions?style=flat-square)](https://github.com/goosull/oh-my-subscriptions/releases)
+[![license](https://img.shields.io/github/license/goosull/oh-my-subscriptions?style=flat-square)](LICENSE)
 
-```
+[Quick start](#quick-start) · [Pi integration](#inside-pi) · [Providers](#providers) ·
+[Safety](#the-paid-credit-guard) · [Commands](#commands) · [Contributing](CONTRIBUTING.md)
+
+</div>
+
+## What is oh-my-subscriptions?
+
+**oh-my-subscriptions (OMS)** is an open-source AI subscription manager and quota-aware
+router for developers who use more than one coding agent plan. It answers three practical
+questions before work starts:
+
+1. **Which Claude, Codex, Gemini, or Kiro account resets next?**
+2. **Which account still has safe subscription quota?**
+3. **Could this request spill into paid credits or metered overage?**
+
+```text
 $ oms status
 ACCOUNT     VENDOR  PLAN  USED                              RESETS  ON PACE FOR   AS OF  BILLS?
 codex-main  codex   team  5h 18%  7d 11%  (142/5000 cr)     3h 2m   full in 41m   0m     at risk
@@ -18,35 +35,23 @@ codex-alt   codex   pro   7d 60%                            4d 15h  71% by reset
 kiro-1      kiro    -     30d >=2% (21/1000 cr, cli only)   16d 7h  -             0m     no
 ```
 
-`ON PACE FOR` is where the window lands if the last few hours continue. Under 100% is
-quota you are not going to get to spend; over means you run out before it resets. It
-stays `-` until there are two readings far enough apart in the same window to draw a
-line through — a projection from one sample is a guess with a decimal point on it.
+### Why use it?
 
-`AS OF` says how old the reading is, and `stale` next to it means old enough that the
-window could have moved underneath — a quarter of the window it describes, so 75 minutes
-for a 5-hour one and a day and a half for a weekly one. A stale reading is not treated as a
-small number; it is treated as no number. `oms auto` passes over one while any account
-has a fresh reading, and says so when every reading is old and it picks anyway. `oms run`
-still launches, with a line saying the guard is going on old information — refusing to
-start something because nothing was measured recently is the worse failure. A Claude
-account is stale between sessions as a matter of course, since Claude Code is the only
-place its figure comes from.
+- **One quota dashboard:** see usage, reset time, freshness, pace, and billing risk.
+- **Multiple accounts:** isolate work, personal, and client subscriptions without mixing sessions.
+- **Safe routing:** select the next usable account by actual reset time and fail closed.
+- **Paid-overage protection:** block an account before subscription usage becomes a charge.
+- **Shared OAuth core:** connect Claude, Codex, and Google credentials once for supported hosts.
+- **Pi TUI:** choose an account, model, and reasoning effort without editing JSON.
+- **Local-first:** the standalone CLI is one Python standard-library file; the core binds to loopback.
 
-`BILLS?` is what happens when a plan reaches its ceiling: `no` means it stops and costs
-nothing, `at risk` means paid overflow is on so the ceiling is a charge, and `BLOCKED`
-means `oms` will not launch it.
+> OMS does not create free quota, bypass provider limits, pool strangers' accounts, or
+> resell access. It organizes subscriptions you are authorized to use and keeps routing
+> decisions explicit.
 
-Other tools rotate accounts when one hits a wall. The point of this one is the wall it
-will not let you walk through: a plan with paid overflow enabled does not stop at its
-ceiling, it starts charging, and `oms` refuses to launch it before that happens.
+## Quick start
 
-This repository holds two things. `oms` is the tool below, and `agent/` is an agent
-being built on what it knows — one conversation routed across several subscriptions,
-which is what having them in one place is ultimately for. They are independent: `oms`
-needs nothing from `agent/`.
-
-## Install
+### Standalone quota CLI
 
 One file, Python 3 standard library only, no dependencies:
 
@@ -64,7 +69,7 @@ oms login kiro my-kiro
 oms status
 ```
 
-### Optionally, inside Claude Code
+### Claude Code plugin
 
 The same repository is also a Claude Code plugin, which adds slash commands and the
 status line. It is not required to use `oms`, and `oms` does not need Claude Code.
@@ -179,6 +184,39 @@ working folders and supported host adapters. Global `pi_auto` controls automatic
 `usage_refresh_seconds` controls refresh cadence. The optional `usage_display` can be
 `widget`, `status`, or `off`; `usage_widget` is its legacy yes/no compatibility alias.
 
+Open the interactive account/model/effort picker inside Pi:
+
+```text
+/oms
+```
+
+Navigate with arrows, type to search, press Enter to select, and Escape to cancel. The
+same picker is available with `Ctrl+Shift+O`. It only saves the account's global default
+to `~/.oms/config.json`; it does **not** change the provider/model of the current Pi
+session. The CLI remains available for scripts:
+
+```bash
+oms models google-work
+oms set google-work model=gemini-3.7-flash-high effort=high
+oms config
+```
+
+The same account configuration is then used by Pi selection and terminal launchers.
+Switching the **current Pi session** is a separate action:
+
+```text
+/oms use              # opens the available-account switcher
+/oms use google-work  # direct session switch
+/oms use auto         # resume automatic session selection
+```
+
+Or launch a new Pi session with that account's saved model and effort:
+
+```bash
+oms pi google-work
+oms pi gemini       # alias when exactly one Gemini account is mapped
+```
+
 Core lifecycle and host commands:
 
 ```bash
@@ -193,7 +231,22 @@ The core binary is downloaded from the matching GitHub release, verified by SHA-
 and stored privately under `~/.oms`. Provider credentials never pass through the Python
 CLI or Pi extension.
 
-## npm releases
+## How quota and safety signals work
+
+`ON PACE FOR` projects where the current quota window lands if the recent burn rate
+continues. Under 100% means subscription quota is likely to expire unused; over 100%
+means the account is on course to run out early. OMS waits for two readings far enough
+apart before projecting—a single sample is not a trend.
+
+`AS OF` reports reading age. A stale reading is treated as unknown for automatic routing,
+not as a conveniently low number. Claude readings naturally age between Claude Code
+sessions because its supported usage signal arrives through the status-line input.
+
+`BILLS?` distinguishes a hard plan ceiling from paid overflow: `no` means the provider
+stops, `at risk` means crossing the ceiling can charge, and `BLOCKED` means OMS refuses
+to launch that account unless explicitly forced.
+
+## Releases and package publishing
 
 `.github/workflows/npm-release.yml` publishes on GitHub Release **published**, or
 manual dispatch with an existing `v<version>` tag. It validates and tests that exact
@@ -299,18 +352,17 @@ Switching also happens at launch, not mid-session: a running CLI holds its own s
 
 ## Which account gets used first
 
-`oms auto` picks by **soonest reset first, then smallest pool.** A window that refills
-often cannot be banked — quota still sitting in a 5-hour window when it resets is simply
-gone — so the shorter the reset interval, the more urgent it is to spend. Among accounts
-that reset on the same cadence, the smaller pool goes first: it runs out sooner and is
-worth less held in reserve.
+`oms auto` picks by **next actual reset first, then smallest pool.** The account whose
+current quota period ends soonest goes first, regardless of whether its window is 5 hours,
+7 days, or 30 days. If reset times match, the smaller pool goes first; if those also match,
+the lower-used account goes first.
 
 ```
 $ oms priority
-priority: automatic - soonest reset first, then smallest pool
+priority: automatic - next reset first, then smallest pool
 
-  codex  1. codex-main   resets every 5h, 18% used, pool 5000   can bill
-  codex  2. codex-alt    resets every 7d, 60% used              cannot bill
+  codex  1. codex-main   resets in 3h 2m, 18% used, pool 5000   can bill
+  codex  2. codex-alt    resets in 4d 15h, 60% used             cannot bill
 ```
 
 The order and what it costs you sit on the same line on purpose: reading one off
@@ -382,6 +434,8 @@ launch as.
 ```bash
 oms set all effort=high           # --effort high for claude, -c model_reasoning_effort for codex
 oms set codex-main model=gpt-5.3-codex
+oms set google-work model=gemini-3.1-pro-low effort=high
+oms models google-work              # * marks its currently selected core model
 oms set codex-main size=5000      # so the pick order knows which pool is smaller
 oms set block_at=90               # global
 oms set codex-main args=          # an empty value clears any key
@@ -437,9 +491,33 @@ Any account you register should be one you are entitled to use on your own terms
 account belongs to an employer or is billed to someone else, their policy governs it,
 not this tool.
 
+## FAQ
+
+### Is this a Claude Code account switcher or a Codex account switcher?
+
+It covers those workflows, but its primary job is broader: subscription quota tracking,
+billing guards, exact-account routing, model defaults, and host integration across Claude
+Code, Codex CLI, Google Gemini / Antigravity, Pi, and partial Kiro support.
+
+### Does OMS upload OAuth tokens or subscription data?
+
+The Python CLI does not read provider token bytes. The optional shared core owns OAuth and
+token refresh, stores its files privately under `~/.oms`, binds to `127.0.0.1`, and exposes
+a bearer-authenticated local facade to host adapters.
+
+### Can I configure models without switching my current Pi session?
+
+Yes. `/oms` opens the global configuration picker. `/oms use` is the separate action that
+switches the current Pi session.
+
+### Why is a usage reading marked stale?
+
+OMS only treats evidence as current while it is young relative to the quota window. It
+will not silently route based on an old number that may no longer describe the account.
+
 ## Commands
 
-```
+```text
 oms login <provider> [<name>]        install if missing, log in, name, prime it
 oms remove <name> [--purge]          unregister an account
 oms add <name> <provider> [--dir PATH] [--paid-overflow yes|no]
@@ -452,10 +530,23 @@ oms auto <provider> --dry-run        say which one, and launch nothing
 oms rename <old> <new>               rename an account, keeping its usage history
 oms priority [<name>... | --auto]    show or set the order `oms auto` picks in
 oms config                           every setting, global and per account
-oms set [<account>] key=value ...    change any of them
-oms handoff [- | --clear]            the brief carried into the next session
-oms run <name> --handoff             launch carrying that brief as the first prompt
+oms models [account|filter]          list available core models
+oms set [<account>] key=value ...    change any setting
+oms handoff [- | --clear]            carry a brief into the next session
+oms run <name> --handoff             launch with that brief as the first prompt
 oms env <name>                       print the export line for a shell
+oms pi <account|gemini> [args...]    launch Pi with saved model and effort
+oms core [install|start|stop|status] manage the shared provider core
+oms core login <provider> [account]  authenticate and bind a core account
+oms core sync                        apply quota and billing policy to credentials
 ```
 
-MIT.
+## Community and support
+
+- Read [CONTRIBUTING.md](CONTRIBUTING.md) before proposing code or documentation changes.
+- Use the [issue templates](https://github.com/goosull/oh-my-subscriptions/issues/new/choose)
+  for bugs and feature requests.
+- Report vulnerabilities privately through [SECURITY.md](SECURITY.md), not a public issue.
+- Participation is governed by the [Code of Conduct](CODE_OF_CONDUCT.md).
+
+Released under the [MIT License](LICENSE).

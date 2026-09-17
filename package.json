@@ -1,13 +1,51 @@
 {
   "name": "oh-my-subscriptions",
-  "version": "0.32.0",
-  "publishConfig": { "access": "public", "tag": "latest" },
+  "version": "0.33.0",
+  "publishConfig": {
+    "access": "public",
+    "tag": "latest"
+  },
   "type": "module",
-  "description": "One terminal, many AI subscriptions — shared OAuth core, quota guards, and Pi routing",
+  "description": "Track and safely route Claude Code, Codex, Gemini, and Kiro subscription quotas across multiple accounts",
   "license": "MIT",
-  "repository": { "type": "git", "url": "git+https://github.com/goosull/oh-my-subscriptions.git" },
-  "files": ["extensions", "bin/oms", "README.md", "LICENSE"],
-  "keywords": ["pi-package"],
-  "pi": { "extensions": ["./extensions/oms.ts"] },
-  "peerDependencies": { "@earendil-works/pi-coding-agent": ">=0.85.1", "@earendil-works/pi-ai": ">=0.85.1", "@earendil-works/pi-tui": ">=0.85.1" }
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/goosull/oh-my-subscriptions.git"
+  },
+  "homepage": "https://github.com/goosull/oh-my-subscriptions#readme",
+  "bugs": {
+    "url": "https://github.com/goosull/oh-my-subscriptions/issues"
+  },
+  "files": [
+    "extensions",
+    "bin/oms",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "pi-package",
+    "ai-subscription-manager",
+    "quota-tracker",
+    "claude-code",
+    "openai-codex",
+    "gemini-cli",
+    "antigravity",
+    "kiro",
+    "multi-account",
+    "oauth",
+    "account-switcher",
+    "usage-monitor",
+    "coding-agent",
+    "terminal"
+  ],
+  "pi": {
+    "extensions": [
+      "./extensions/oms.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": ">=0.85.1",
+    "@earendil-works/pi-ai": ">=0.85.1",
+    "@earendil-works/pi-tui": ">=0.85.1"
+  }
 }

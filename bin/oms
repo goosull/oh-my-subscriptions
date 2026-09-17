@@ -20,7 +20,7 @@ if hasattr(sys.stdout, "reconfigure"):
 OMS = Path(os.environ.get("OMS_HOME", Path.home() / ".oms"))
 CFG, USAGE = OMS / "config.json", OMS / "usage"
 DEFAULT_CLAUDE_DIR = Path.home() / ".claude"
-CORE_RELEASE = "0.32.0"
+CORE_RELEASE = "0.33.0"
 # Shared from ~/.claude into alt claude profiles so a second account is not a bare install.
 SHARED = ["skills", "plugins", "agents", "commands", "settings.json", "CLAUDE.md", "output-styles"]
 
@@ -61,6 +61,17 @@ def find(cfg, name):
         if a["name"] == name:
             return a
     die(f"no such account: {name} (have: {', '.join(a['name'] for a in cfg['accounts']) or 'none'})")
+
+
+def _route(cfg, name):
+    return next((r for r in (cfg.get("pi") or {}).get("routes", [])
+                 if r.get("account") == name), None)
+
+
+def _account_names(cfg):
+    return list(dict.fromkeys([*(a["name"] for a in cfg["accounts"]),
+                               *(r.get("account") for r in (cfg.get("pi") or {}).get("routes", [])
+                                 if r.get("account"))]))
 
 
 # --- usage: claude ------------------------------------------------------------
@@ -625,8 +636,8 @@ def _status_json(cfg):
                        key=[None if isinstance(k, float) and k == float("inf") else k
                             for k in (1, *rank(u, synthetic))])
         rows.append(row)
-    rows.sort(key=lambda r: (not r.get("available"),
-                             [float("inf") if k is None else k for k in r.get("key") or [9]]))
+    rows.sort(key=lambda r: [float("inf") if k is None else k
+                             for k in r.get("key") or [9]])
     print(json.dumps({"block_at": cfg["block_at"],
                       "warn_at": cfg.get("warn_at", min(cfg["block_at"], 95) - 10),
                       "priority": cfg.get("priority"), "accounts": rows,
@@ -883,6 +894,29 @@ def _coerce(key, val):
     return val
 
 
+def _core_models():
+    try:
+        import urllib.request
+        token = (OMS / "core" / "facade.token").read_text().strip()
+        req = urllib.request.Request("http://127.0.0.1:8319/v1/models",
+                                     headers={"Authorization": "Bearer " + token})
+        with urllib.request.urlopen(req, timeout=5) as response:
+            return [row["id"] for row in json.load(response).get("data", []) if row.get("id")]
+    except (OSError, ValueError, KeyError):
+        return []
+
+
+def cmd_models(cfg, args):
+    """List core models, optionally filtered by account or text."""
+    query = args[0].lower() if args else ""
+    route = _route(cfg, args[0]) if args else None
+    if route: query = ""
+    models = [m for m in _core_models() if not query or query in m.lower()]
+    if not models: die("no matching core models (is oms-core running?)")
+    current = route.get("model") if route else None
+    for model in models: print(("* " if model == current else "  ") + model)
+
+
 def cmd_config(cfg, args):
     """Read every setting. `oms set` is the one place that writes them."""
     if args:
@@ -895,20 +929,26 @@ def cmd_config(cfg, args):
         if k == "priority":
             v = ", ".join(v) if v else "auto"
         print(f"  {k:<15} {v if v is not None else '-'}")
-    for a in cfg["accounts"]:
-        print(f"\n{a['name']}  ({a['vendor']})")
+    direct = {a["name"]: a for a in cfg["accounts"]}
+    for name in _account_names(cfg):
+        a, route = direct.get(name), _route(cfg, name)
+        vendor = a["vendor"] if a else next((b.get("provider") for b in _core_bindings(cfg)
+                                              if b.get("account") == name), "core")
+        print(f"\n{name}  ({vendor})")
         for k in ACCOUNT_KEYS:
-            if k == "name":
-                continue
-            v = a.get(k)
-            if k == "args":
-                v = " ".join(v) if v else None
-            elif k == "paid_overflow" and v is not None:
-                v = "yes" if v else "no"
+            if k == "name": continue
+            v = (route or {}).get(k) if k in ("model", "effort") and route else a.get(k) if a else None
+            if k == "args": v = " ".join(v) if v else None
+            elif k == "paid_overflow" and v is not None: v = "yes" if v else "no"
             print(f"  {k:<15} {v if v is not None else '-'}")
-        flags = launch_flags(a)
-        print(f"  {'-> launches':<15} {a['vendor']} {' '.join(flags) if flags else '(defaults)'}")
-    print("\n  oms set all effort=high      oms set <account> model=...      oms set block_at=90")
+        if route:
+            print(f"  {'-> core route':<15} oms-core/{route.get('model') or '?'}"
+                  f"{':' + route['effort'] if route.get('effort') else ''}")
+        elif a:
+            flags = launch_flags(a)
+            print(f"  {'-> launches':<15} {a['vendor']} {' '.join(flags) if flags else '(defaults)'}")
+    print("\n  oms models <account>         oms set <account> model=... effort=high")
+    print("  oms set block_at=90          oms pi <account>")
 
 
 def cmd_set(cfg, args):
@@ -917,11 +957,19 @@ def cmd_set(cfg, args):
         die("usage: oms set [<account>] key=value ...\n"
             "  global:  " + "  ".join(GLOBAL_KEYS) + "\n"
             "  account: " + "  ".join(ACCOUNT_KEYS))
-    targets = None
+    targets, route_targets = None, None
     if "=" not in args[0]:
-        targets = list(cfg["accounts"]) if args[0] == "all" else [find(cfg, args[0])]
+        name = args[0]
+        if name == "all":
+            targets = list(cfg["accounts"])
+            route_targets = list((cfg.get("pi") or {}).get("routes", []))
+        else:
+            account, route = next((a for a in cfg["accounts"] if a["name"] == name), None), _route(cfg, name)
+            if not account and not route:
+                die(f"no such account: {name} (have: {', '.join(_account_names(cfg)) or 'none'})")
+            targets, route_targets = ([account] if account else []), ([route] if route else [])
         args = args[1:]
-    keys = ACCOUNT_KEYS if targets else GLOBAL_KEYS
+    keys = ACCOUNT_KEYS if targets is not None else GLOBAL_KEYS
     for pair in args:
         if "=" not in pair:
             die(f"expected key=value, got {pair!r}")
@@ -930,24 +978,27 @@ def cmd_set(cfg, args):
             die(f"unknown {'account' if targets else 'global'} key {k!r}."
                 f" valid: {', '.join(keys)}")
         val = _coerce(k, v)
-        if not targets:
+        if targets is None:
             cfg.pop(k, None) if val is None else cfg.update({k: val})
             continue
+        if k in ("model", "effort") and route_targets:
+            if k == "model" and val and (models := _core_models()) and val not in models:
+                die(f"unknown core model {val!r}; run `oms models`")
+            if k == "effort" and val and val not in ("off", "minimal", "low", "medium", "high", "xhigh", "max"):
+                die(f"effort takes off, minimal, low, medium, high, xhigh, or max; got {val!r}")
+            for route in route_targets:
+                route.pop(k, None) if val is None else route.update({k: val})
         for a in targets:
+            if k in ("model", "effort") and route_targets:
+                continue
             if k in SETTING_KEYS and k not in provider(a)["flags"]:
-                # say so rather than storing a setting that will never be applied
-                print(f"  skipped {a['name']}: {a['vendor']} has no {k} setting",
-                      file=sys.stderr)
+                print(f"  skipped {a['name']}: {a['vendor']} has no {k} setting", file=sys.stderr)
                 continue
             if k == "effort" and val and val not in provider(a)["efforts"]:
-                die(f"{a['vendor']} takes effort "
-                    f"{', '.join(provider(a)['efforts'])}; got {val!r}")
-            if k == "name":
-                cmd_rename(cfg, [a["name"], val])  # moves usage and profile with it
-            elif val is None:
-                a.pop(k, None)
-            else:
-                a[k] = val
+                die(f"{a['vendor']} takes effort {', '.join(provider(a)['efforts'])}; got {val!r}")
+            if k == "name": cmd_rename(cfg, [a["name"], val])
+            elif val is None: a.pop(k, None)
+            else: a[k] = val
     save(cfg)
     cmd_config(cfg, [])
 
@@ -976,18 +1027,11 @@ def cmd_run(cfg, args, check=True):
 
 
 def rank(u, acct=None):
-    """Sort key for auto-selection: shortest reset first, then smallest pool.
-
-    A window that refills often cannot be banked - quota still in a 5-hour window when
-    it resets is simply gone - so the shorter the reset interval, the more urgent it is
-    to spend. Among accounts that reset on the same cadence, drain the smaller pool
-    first and keep the larger one in reserve, since the small one runs out sooner and
-    is worth less held back. Pool size is whatever `size` you set on the account; oms
-    cannot read it, because neither vendor reports an absolute quota.
-    """
-    label, pct = u.get("soonest") or ("?", u.get("pct", 0))
+    """Sort by the next actual reset, then the smallest pool and lowest usage."""
+    _, pct = u.get("soonest") or ("?", u.get("pct", 0))
     size = u.get("size") if u.get("size") is not None else (acct or {}).get("size")
-    return (_mins(label), size if size is not None else float("inf"), pct)
+    return (u.get("resets") or float("inf"),
+            size if size is not None else float("inf"), pct)
 
 
 def sel_key(cfg, acct, u):
@@ -1003,7 +1047,7 @@ def cmd_priority(cfg, args):
     if args and args[0] in ("--auto", "auto", "reset"):
         cfg.pop("priority", None)
         save(cfg)
-        print("priority: automatic (soonest reset first, then smallest pool)")
+        print("priority: automatic (next reset first, then smallest pool)")
         return
     if args:
         for n in args:
@@ -1012,7 +1056,7 @@ def cmd_priority(cfg, args):
         save(cfg)
     order = cfg.get("priority")
     if not order:
-        print("priority: automatic - soonest reset first, then smallest pool\n")
+        print("priority: automatic - next reset first, then smallest pool\n")
         # one width for the whole table, not one per vendor group
         w = max((len(a["name"]) for a in cfg["accounts"]), default=4)
         for v in sorted({a["vendor"] for a in cfg["accounts"]}):
@@ -1021,8 +1065,8 @@ def cmd_priority(cfg, args):
                              for a, u in zip(mine, usage_all(mine)) if not u.get("err")),
                             key=lambda t: t[0])
             for i, (k, a, u) in enumerate(ranked, 1):
-                lab, used = u["soonest"]
-                why = f"resets every {lab}, {used:.0f}% used"
+                _, used = u["soonest"]
+                why = f"resets in {_until(u.get('resets'))}, {used:.0f}% used"
                 sz = k[2] if len(k) > 2 else None
                 if isinstance(sz, (int, float)) and sz != float("inf"):
                     why += f", pool {sz:g}"
@@ -1491,6 +1535,28 @@ def _bind_core_account(cfg, account_name, row):
     cfg["pi"] = {**(cfg.get("pi") or {}), "accountBindingsConfirmed": True, "routes": routes}
 
 
+def cmd_pi(cfg, args):
+    """Launch Pi pinned to one mapped OMS account."""
+    if not args:
+        die("usage: oms pi <account|gemini> [pi args...]")
+    name = args[0]
+    routes = [r for r in (cfg.get("pi") or {}).get("routes", []) if r.get("provider") == "oms-core"]
+    if name in ("gemini", "google"):
+        matches = [r for r in routes if str(r.get("model", "")).startswith("gemini")]
+        if len(matches) != 1: die("gemini alias requires exactly one mapped Gemini account")
+        route = matches[0]
+    else:
+        route = next((r for r in routes if r.get("account") == name), None)
+    if not route or not route.get("model"):
+        die(f"no oms-core Pi route configured for {name}")
+    env = dict(os.environ)
+    env["OMS_ACCOUNT"] = route["account"]
+    command = ["pi", "--model", f"oms-core/{route['model']}"]
+    if route.get("effort"): command += ["--thinking", route["effort"]]
+    command += args[1:]
+    os.execvpe(command[0], command, env)
+
+
 def cmd_core(cfg, args):
     """Manage the shared OMS provider sidecar; provider OAuth remains core-owned."""
     import signal
@@ -1640,7 +1706,9 @@ def cmd_core(cfg, args):
         for row in rows:
             binding = bindings.get(row.get("auth_index") or "")
             pair = readings.get((binding or {}).get("account"))
-            runtime_blocked = bool(row.get("unavailable") or row.get("status") in ("error", "disabled"))
+            # `disabled` is also the state this sync writes for unsafe accounts; treating
+            # it as fresh provider evidence makes that decision impossible to recover.
+            runtime_blocked = bool(row.get("unavailable") or row.get("status") == "error")
             if binding and runtime_blocked:
                 core_id = re.sub(r"[^A-Za-z0-9_-]", "_", str(binding["core_id"]))
                 message = str(row.get("status_message") or "provider cooldown/unavailable")
@@ -1649,6 +1717,11 @@ def cmd_core(cfg, args):
                             "error": "core unavailable: " + message[:300]})
                 safe = False
             elif binding and not pair:
+                refresh_core_quota(row, binding)
+                u = _core_usage(binding)
+                synthetic = {"name": binding["account"], "paid_overflow": bool(binding.get("paid_overflow"))}
+                safe = not u.get("err") and not stale(u) and not blocked(synthetic, u, cfg["block_at"])
+            elif binding and row.get("provider") == "antigravity" and pair[1].get("err"):
                 refresh_core_quota(row, binding)
                 u = _core_usage(binding)
                 synthetic = {"name": binding["account"], "paid_overflow": bool(binding.get("paid_overflow"))}
@@ -1690,7 +1763,9 @@ def cmd_core(cfg, args):
             for key in ("ANTHROPIC_API_KEY",): env.pop(key, None)
             env["ANTHROPIC_BASE_URL"] = "http://127.0.0.1:8319"
             env["ANTHROPIC_AUTH_TOKEN"] = token
-            command = ["claude", "--model", route["model"], *args[3:]]
+            command = ["claude", "--model", route["model"]]
+            if route.get("effort"): command += ["--effort", route["effort"]]
+            command += args[3:]
         else:
             env["OMS_CORE_TOKEN"] = token
             command = ["codex", '-c', 'model_provider="oms"',
@@ -1698,7 +1773,9 @@ def cmd_core(cfg, args):
                        '-c', 'model_providers.oms.base_url="http://127.0.0.1:8319/v1"',
                        '-c', 'model_providers.oms.env_key="OMS_CORE_TOKEN"',
                        '-c', 'model_providers.oms.wire_api="responses"',
-                       '-m', route["model"], *args[3:]]
+                       '-m', route["model"]]
+            if route.get("effort"): command += ['-c', f'model_reasoning_effort="{route["effort"]}"']
+            command += args[3:]
         os.execvpe(command[0], command, env)
     if action == "stop":
         if running:
@@ -1749,17 +1826,17 @@ def selftest():
     assert _win(10080) == "7d" and _win(300) == "5h" and _win(None) == "?"
     assert _until(time.time() + 7260).startswith("2h") and _until(0) == "-"
     assert _until(time.time() - 5) == "now"
-    w5, w7 = reading([("5h", 90)]), reading([("7d", 0)])
-    # a window that resets sooner outranks a longer one, however empty the longer one is
-    assert rank(w5) < rank(w7)
-    assert rank(reading([("5h", 10)])) < rank(reading([("5h", 80)]))
-    # same cadence: the smaller pool is spent first, and an unstated size sorts last
-    assert rank(w7, {"size": 100}) < rank(w7, {"size": 5000}) < rank(w7, {})
-    assert rank(reading([("5h", 99)]), {"size": 9}) < rank(w7, {"size": 1})
-    # the order is decided on the window that resets soonest, so that is the one to show
-    two = reading([("5h", 10), ("7d", 90)])
-    assert rank(two)[0] == _mins("5h") and rank(two)[-1] == 10, \
-        "ranking reads the soonest window, not the fullest"
+    now = time.time()
+    early = reading([("7d", 90)], resets=now + 3600)
+    late = reading([("5h", 0)], resets=now + 7200)
+    assert rank(early) < rank(late), "the next actual reset wins, regardless of cadence"
+    assert rank(reading([("5h", 10)], resets=now)) < \
+        rank(reading([("5h", 80)], resets=now))
+    # same reset time: the smaller pool is spent first, and an unstated size sorts last
+    assert rank(early, {"size": 100}) < rank(early, {"size": 5000}) < rank(early, {})
+    assert rank(reading([("5h", 99)], resets=now), {"size": 9}) < rank(early, {"size": 1})
+    two = reading([("5h", 10), ("7d", 90)], resets=now)
+    assert rank(two)[-1] == 10, "usage tie-breaker reads the soonest window"
     cfg_ = {"priority": ["b"], "accounts": []}
     assert sel_key(cfg_, {"name": "b"}, reading([("7d", 99)])) < \
         sel_key(cfg_, {"name": "a"}, reading([("7d", 0)])), \
@@ -2131,7 +2208,7 @@ CMDS = {"status": cmd_status, "add": cmd_add, "run": cmd_run, "auto": cmd_auto,
         "config": cmd_config, "set": cmd_set, "remove": cmd_remove, "doctor": cmd_doctor,
         "handoff": cmd_handoff, "check": cmd_check,
         "statusline": cmd_statusline, "install": cmd_install, "env": cmd_env,
-        "core": cmd_core}
+        "models": cmd_models, "pi": cmd_pi, "core": cmd_core}
 USAGE_TEXT = __doc__ + """
   oms login <provider> [<name>]        install if missing, log in, name, prime it
   oms remove <name> [--purge]          unregister an account
@@ -2145,10 +2222,12 @@ USAGE_TEXT = __doc__ + """
   oms rename <old> <new>               rename an account, keeping its usage history
   oms priority [<name>... | --auto]    show or set the order `oms auto` picks in
   oms config                           every setting, global and per account
+  oms models [account|filter]          list available core models
   oms set [<account>] key=value ...    change any of them
   oms handoff [- | --clear]            the brief carried into the next session
   oms run <name> --handoff             launch carrying that brief as the first prompt
   oms env <name>                       print the export line for a shell
+  oms pi <account|gemini> [args...]    launch Pi pinned to an OMS account
   oms core install                     install verified shared-core binary
   oms core [start|stop|status]         manage the shared provider sidecar
   oms core login <provider> [account]  login, bind, and sync automatically
