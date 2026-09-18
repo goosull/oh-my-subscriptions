@@ -263,37 +263,65 @@ func (c *ProductionCore) restoreSelectionLocked() {
 	}
 }
 
-func (c *ProductionCore) Execute(ctx context.Context, protocol, model string, body []byte) ([]byte, http.Header, string, error) {
+func (c *ProductionCore) executionAccount(name, model string) (Account, error) {
 	c.RefreshAccounts()
-	account, ok := c.Current()
-	if !ok {
-		return nil, nil, "", errors.New("no account selected")
+	if name == "" {
+		account, ok := c.Current()
+		if !ok {
+			return Account{}, errors.New("no account selected")
+		}
+		name = account.ID
 	}
-	if account.Disabled {
-		return nil, nil, account.Name, errors.New("selected account unavailable")
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	for _, account := range c.accounts {
+		if account.ID != name && account.Name != name {
+			continue
+		}
+		if account.Disabled {
+			return account, errors.New("selected account unavailable")
+		}
+		supported := false
+		for _, info := range accountModels(account) {
+			if info != nil && info.ID == model {
+				supported = true
+				break
+			}
+		}
+		if !supported {
+			return account, fmt.Errorf("selected account does not provide model %q", model)
+		}
+		return account, nil
 	}
-	if model != account.Model {
-		return nil, nil, account.Name, fmt.Errorf("selected account does not provide model %q", model)
+	return Account{}, fmt.Errorf("unknown account %q", name)
+}
+
+func (c *ProductionCore) Execute(ctx context.Context, protocol, model string, body []byte) ([]byte, http.Header, string, error) {
+	return c.ExecuteAccount(ctx, "", protocol, model, body)
+}
+func (c *ProductionCore) ExecuteAccount(ctx context.Context, name, protocol, model string, body []byte) ([]byte, http.Header, string, error) {
+	account, err := c.executionAccount(name, model)
+	if err != nil {
+		return nil, nil, account.Name, err
 	}
 	response, errMessage := c.handler.ExecuteModel(ctx, handlers.ModelExecutionRequest{EntryProtocol: protocol, ExitProtocol: protocol, Model: model, Body: body, ForcedProvider: account.Provider, AuthID: account.AuthID})
 	if errMessage != nil {
-		return nil, nil, account.Name, errors.New("selected account unavailable")
+		return nil, nil, account.Name, fmt.Errorf("upstream execution failed: %v", errMessage.Error)
 	}
 	return response.Body, response.Headers, account.Name, nil
 }
 func (c *ProductionCore) ExecuteStream(ctx context.Context, protocol, model string, body []byte) (<-chan []byte, <-chan error, http.Header, string, error) {
-	c.RefreshAccounts()
-	account, ok := c.Current()
-	if !ok {
-		return nil, nil, nil, "", errors.New("no account selected")
-	}
-	if account.Disabled {
-		return nil, nil, nil, account.Name, errors.New("selected account unavailable")
-	}
-	if model != account.Model {
-		return nil, nil, nil, account.Name, fmt.Errorf("selected account does not provide model %q", model)
+	return c.ExecuteStreamAccount(ctx, "", protocol, model, body)
+}
+func (c *ProductionCore) ExecuteStreamAccount(ctx context.Context, name, protocol, model string, body []byte) (<-chan []byte, <-chan error, http.Header, string, error) {
+	account, err := c.executionAccount(name, model)
+	if err != nil {
+		return nil, nil, nil, account.Name, err
 	}
 	stream, errMessage := c.handler.ExecuteModelStream(ctx, handlers.ModelExecutionRequest{EntryProtocol: protocol, ExitProtocol: protocol, Model: model, Stream: true, Body: body, ForcedProvider: account.Provider, AuthID: account.AuthID})
+	if errMessage != nil {
+		return nil, nil, nil, account.Name, fmt.Errorf("upstream execution failed: %v", errMessage.Error)
+	}
 	if errMessage != nil {
 		return nil, nil, nil, account.Name, errors.New("selected account unavailable")
 	}

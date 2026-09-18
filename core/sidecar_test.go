@@ -28,7 +28,7 @@ func TestMockSidecarPinsPolicyAccountEndToEnd(t *testing.T) {
 	defer server.Close()
 	client := server.Client()
 
-	request := func(method, path string, payload any, authenticated bool) *http.Response {
+	requestWithAccount := func(method, path string, payload any, authenticated bool, account string) *http.Response {
 		var body io.Reader
 		if payload != nil {
 			raw, _ := json.Marshal(payload)
@@ -44,11 +44,17 @@ func TestMockSidecarPinsPolicyAccountEndToEnd(t *testing.T) {
 		if payload != nil {
 			req.Header.Set("Content-Type", "application/json")
 		}
+		if account != "" {
+			req.Header.Set("X-OMS-Account", account)
+		}
 		resp, err := client.Do(req)
 		if err != nil {
 			t.Fatal(err)
 		}
 		return resp
+	}
+	request := func(method, path string, payload any, authenticated bool) *http.Response {
+		return requestWithAccount(method, path, payload, authenticated, "")
 	}
 
 	models := request(http.MethodGet, "/v1/models", nil, true)
@@ -106,6 +112,16 @@ func TestMockSidecarPinsPolicyAccountEndToEnd(t *testing.T) {
 	if !bytes.Contains(secondBody, []byte("served by auth-b")) {
 		t.Fatalf("second response=%s", secondBody)
 	}
+	// A second session pins account a per request without mutating the shared current account.
+	exact := requestWithAccount(http.MethodPost, "/v1/chat/completions", map[string]any{"model": "mock-model", "messages": []any{}}, true, "auth-a")
+	if exact.StatusCode != http.StatusOK || exact.Header.Get("X-OMS-Account") != "a" {
+		t.Fatalf("exact route status=%d account=%q", exact.StatusCode, exact.Header.Get("X-OMS-Account"))
+	}
+	_ = exact.Body.Close()
+	current, _ := core.Current()
+	if current.Name != "b" {
+		t.Fatalf("per-request pin mutated shared selection: %+v", current)
+	}
 	streamed := request(http.MethodPost, "/v1/chat/completions", map[string]any{"model": "mock-model", "messages": []any{}, "stream": true}, true)
 	if streamed.StatusCode != http.StatusOK || streamed.Header.Get("X-OMS-Account") != "b" {
 		t.Fatalf("stream route status=%d account=%q", streamed.StatusCode, streamed.Header.Get("X-OMS-Account"))
@@ -131,7 +147,7 @@ func TestMockSidecarPinsPolicyAccountEndToEnd(t *testing.T) {
 		t.Fatal("disabled exact account fell back to another credential")
 	}
 
-	want := []string{"auth-a", "auth-a", "auth-b", "auth-b"}
+	want := []string{"auth-a", "auth-a", "auth-b", "auth-a", "auth-b"}
 	got := core.ExecutedIDs()
 	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
 		t.Fatalf("executed auth IDs=%v, want %v", got, want)

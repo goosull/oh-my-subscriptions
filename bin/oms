@@ -20,7 +20,7 @@ if hasattr(sys.stdout, "reconfigure"):
 OMS = Path(os.environ.get("OMS_HOME", Path.home() / ".oms"))
 CFG, USAGE = OMS / "config.json", OMS / "usage"
 DEFAULT_CLAUDE_DIR = Path.home() / ".claude"
-CORE_RELEASE = "0.33.0"
+CORE_RELEASE = "0.33.1"
 # Shared from ~/.claude into alt claude profiles so a second account is not a bare install.
 SHARED = ["skills", "plugins", "agents", "commands", "settings.json", "CLAUDE.md", "output-styles"]
 
@@ -1729,6 +1729,11 @@ def cmd_core(cfg, args):
             else:
                 safe = bool(pair and not pair[1].get("err") and not stale(pair[1]) and
                             not blocked(pair[0], pair[1], cfg["block_at"]))
+            # Claude has no out-of-session quota endpoint. Once the reported reset time
+            # passes, the old percentage is history; allow a guarded probe to refresh it.
+            if binding and row.get("provider") == "claude" and pair and pair[1].get("resets") and \
+                    float(pair[1]["resets"]) <= time.time():
+                safe = True
             should_disable = not safe
             if bool(row.get("disabled")) != should_disable:
                 api("auth-files/status", "PATCH", {"name": row.get("name"),

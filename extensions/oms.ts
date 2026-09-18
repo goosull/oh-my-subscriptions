@@ -35,6 +35,7 @@ export default async function (pi: ExtensionAPI) {
   let refreshing = false;
   let pinnedAccount = process.env.OMS_ACCOUNT || undefined;
   let activeAccount = pinnedAccount;
+  let requestAccount: string | undefined;
   let requestRender: (() => void) | undefined;
   const showUsage = (ctx: ExtensionContext, snapshot: Snapshot) => {
     const display = snapshot.usage_display ?? "off";
@@ -105,7 +106,7 @@ export default async function (pi: ExtensionAPI) {
     for (const route of ordered) {
       if (route.provider === "oms-core") {
         if (!core) continue;
-        try { await core.select(route.coreAccount ?? route.account, route.model); } catch { continue; }
+        try { await core.select(route.coreAccount ?? route.account, route.model); requestAccount = route.coreAccount ?? route.account; } catch { continue; }
       }
       const model = ctx.modelRegistry.find(route.provider, route.model);
       if (model && await pi.setModel(model)) {
@@ -234,7 +235,10 @@ export default async function (pi: ExtensionAPI) {
             if (!safe) throw new Error("OMS blocked this account/model; submit again to select another approved route");
             const signal = options?.signal ? AbortSignal.any([options.signal, controller.signal]) : controller.signal;
             signal.throwIfAborted();
-            const source = send(model, context, { ...options, signal });
+            const headers = requestAccount && model.provider === "oms-core"
+              ? { ...options?.headers, "X-OMS-Account": requestAccount }
+              : options?.headers;
+            const source = send(model, context, { ...options, headers, signal });
             for await (const event of source) output.push(event);
             const result = await source.result();
             // Claude bridge may keep its subprocess alive across tool-result boundaries.
@@ -273,7 +277,7 @@ export default async function (pi: ExtensionAPI) {
         const candidates = approved(await status(), routes).filter(route => route.provider === "oms-core" && route.model === ctx.model?.id);
         let selected = false;
         for (const route of candidates) {
-          try { await core?.select(route.coreAccount ?? route.account, route.model); activeAccount = route.account; selected = true; requestRender?.(); break; } catch {}
+          try { await core?.select(route.coreAccount ?? route.account, route.model); requestAccount = route.coreAccount ?? route.account; activeAccount = route.account; selected = true; requestRender?.(); break; } catch {}
         }
         if (!selected) throw new Error("OMS: no approved core account provides this model");
         return;

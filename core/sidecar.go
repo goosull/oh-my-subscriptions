@@ -43,6 +43,11 @@ type Runtime interface {
 	ExecuteStream(context.Context, string, string, []byte) (<-chan []byte, <-chan error, http.Header, string, error)
 }
 
+type exactAccountRuntime interface {
+	ExecuteAccount(context.Context, string, string, string, []byte) ([]byte, http.Header, string, error)
+	ExecuteStreamAccount(context.Context, string, string, string, []byte) (<-chan []byte, <-chan error, http.Header, string, error)
+}
+
 type MockCore struct {
 	mu       sync.RWMutex
 	accounts map[string]Account
@@ -183,10 +188,29 @@ func (c *MockCore) Current() (Account, bool) {
 	account, ok := c.accounts[c.active]
 	return account, ok && !c.closed
 }
+func (c *MockCore) account(name string) (Account, bool) {
+	if name == "" {
+		return c.Current()
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	for _, account := range c.accounts {
+		if account.ID == name || account.AuthID == name || account.Name == name {
+			return account, !c.closed
+		}
+	}
+	return Account{}, false
+}
 func (c *MockCore) Execute(ctx context.Context, protocol, model string, body []byte) ([]byte, http.Header, string, error) {
-	account, ok := c.Current()
+	return c.ExecuteAccount(ctx, "", protocol, model, body)
+}
+func (c *MockCore) ExecuteAccount(ctx context.Context, name, protocol, model string, body []byte) ([]byte, http.Header, string, error) {
+	account, ok := c.account(name)
 	if !ok {
 		return nil, nil, "", errors.New("no account selected")
+	}
+	if account.Disabled {
+		return nil, nil, account.Name, errors.New("selected account unavailable")
 	}
 	if model != account.Model {
 		return nil, nil, account.Name, fmt.Errorf("selected account does not provide model %q", model)
@@ -198,9 +222,15 @@ func (c *MockCore) Execute(ctx context.Context, protocol, model string, body []b
 	return response.Body, response.Headers, account.Name, nil
 }
 func (c *MockCore) ExecuteStream(ctx context.Context, protocol, model string, body []byte) (<-chan []byte, <-chan error, http.Header, string, error) {
-	account, ok := c.Current()
+	return c.ExecuteStreamAccount(ctx, "", protocol, model, body)
+}
+func (c *MockCore) ExecuteStreamAccount(ctx context.Context, name, protocol, model string, body []byte) (<-chan []byte, <-chan error, http.Header, string, error) {
+	account, ok := c.account(name)
 	if !ok {
 		return nil, nil, nil, "", errors.New("no account selected")
+	}
+	if account.Disabled {
+		return nil, nil, nil, account.Name, errors.New("selected account unavailable")
 	}
 	if model != account.Model {
 		return nil, nil, nil, account.Name, fmt.Errorf("selected account does not provide model %q", model)
@@ -315,10 +345,20 @@ func NewHandler(runtime Runtime, token string) (http.Handler, error) {
 				writeJSON(writer, http.StatusBadRequest, map[string]any{"error": "model is required"})
 				return
 			}
+			accountID := strings.TrimSpace(request.Header.Get("X-OMS-Account"))
 			if payload.Stream {
-				chunks, errs, headers, account, err := runtime.ExecuteStream(request.Context(), protocol, payload.Model, body)
+				var chunks <-chan []byte
+				var errs <-chan error
+				var headers http.Header
+				var account string
+				var err error
+				if exact, ok := runtime.(exactAccountRuntime); ok && accountID != "" {
+					chunks, errs, headers, account, err = exact.ExecuteStreamAccount(request.Context(), accountID, protocol, payload.Model, body)
+				} else {
+					chunks, errs, headers, account, err = runtime.ExecuteStream(request.Context(), protocol, payload.Model, body)
+				}
 				if err != nil {
-					writeJSON(writer, http.StatusConflict, map[string]any{"error": "selected account unavailable"})
+					writeJSON(writer, http.StatusConflict, map[string]any{"error": err.Error()})
 					return
 				}
 				copyHeaders(writer.Header(), headers)
@@ -376,9 +416,16 @@ func NewHandler(runtime Runtime, token string) (http.Handler, error) {
 				}
 				return
 			}
-			response, headers, account, err := runtime.Execute(request.Context(), protocol, payload.Model, body)
+			var response []byte
+			var headers http.Header
+			var account string
+			if exact, ok := runtime.(exactAccountRuntime); ok && accountID != "" {
+				response, headers, account, err = exact.ExecuteAccount(request.Context(), accountID, protocol, payload.Model, body)
+			} else {
+				response, headers, account, err = runtime.Execute(request.Context(), protocol, payload.Model, body)
+			}
 			if err != nil {
-				writeJSON(writer, http.StatusConflict, map[string]any{"error": "selected account unavailable"})
+				writeJSON(writer, http.StatusConflict, map[string]any{"error": err.Error()})
 				return
 			}
 			copyHeaders(writer.Header(), headers)
